@@ -1,0 +1,36 @@
+body {
+  font-family: Inter, sans-serif;
+  margin: 0;
+  background: #f8f8fa;
+}
+
+.navbar {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  background: #6C4DF6;
+}
+
+.navbar a {
+  color: white;
+  text-decoration: none;
+}
+
+.feed {
+  padding: 20px;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e7e7eb;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+}
+
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
