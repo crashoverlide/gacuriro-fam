@@ -5,18 +5,29 @@ import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
-// Use memory storage so we can upload the buffer to Supabase
+// Memory storage for Supabase upload
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
-async function attachUser(post) {
+async function attachUser(post, currentUserId = null) {
   const { data: user } = await supabase
     .from("users")
     .select("id, username, full_name, avatar")
     .eq("id", post.user_id)
     .single();
+
+  let liked = false;
+  if (currentUserId) {
+    const { data: like } = await supabase
+      .from("likes")
+      .select("id")
+      .eq("user_id", currentUserId)
+      .eq("post_id", post.id)
+      .maybeSingle();
+    liked = !!like;
+  }
 
   return {
     _id: post.id,
@@ -27,9 +38,10 @@ async function attachUser(post) {
     mediaType: post.media_type,
     isReel: post.is_reel,
     location: post.location,
-    likesCount: post.likes_count,
-    commentsCount: post.comments_count,
+    likesCount: post.likes_count || 0,
+    commentsCount: post.comments_count || 0,
     createdAt: post.created_at,
+    liked,
     user: user
       ? {
           _id: user.id,
@@ -42,6 +54,7 @@ async function attachUser(post) {
   };
 }
 
+// ====================== FEED ======================
 router.get("/feed", protect, async (req, res) => {
   try {
     const { data: posts, error } = await supabase
@@ -49,14 +62,19 @@ router.get("/feed", protect, async (req, res) => {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(40);
+
     if (error) return res.status(500).json({ message: error.message });
-    const shaped = await Promise.all((posts || []).map(attachUser));
+
+    const shaped = await Promise.all(
+      (posts || []).map((p) => attachUser(p, req.user.id))
+    );
     res.json({ posts: shaped });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
+// ====================== EXPLORE ======================
 router.get("/explore", protect, async (req, res) => {
   try {
     const { data: posts, error } = await supabase
@@ -64,14 +82,19 @@ router.get("/explore", protect, async (req, res) => {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(40);
+
     if (error) return res.status(500).json({ message: error.message });
-    const shaped = await Promise.all((posts || []).map(attachUser));
+
+    const shaped = await Promise.all(
+      (posts || []).map((p) => attachUser(p, req.user.id))
+    );
     res.json({ posts: shaped });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
+// ====================== REELS ======================
 router.get("/reels", protect, async (req, res) => {
   try {
     const { data: posts, error } = await supabase
@@ -80,15 +103,19 @@ router.get("/reels", protect, async (req, res) => {
       .eq("is_reel", true)
       .order("created_at", { ascending: false })
       .limit(40);
+
     if (error) return res.status(500).json({ message: error.message });
-    const shaped = await Promise.all((posts || []).map(attachUser));
+
+    const shaped = await Promise.all(
+      (posts || []).map((p) => attachUser(p, req.user.id))
+    );
     res.json({ posts: shaped });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// ========== UPLOAD TO SUPABASE STORAGE ==========
+// ====================== CREATE POST ======================
 router.post("/", protect, upload.single("media"), async (req, res) => {
   try {
     let mediaUrl = "";
@@ -110,7 +137,6 @@ router.post("/", protect, upload.single("media"), async (req, res) => {
         return res.status(500).json({ message: uploadError.message });
       }
 
-      // Get public URL
       const { data: publicData } = supabase.storage
         .from("media")
         .getPublicUrl(fileName);
@@ -139,24 +165,25 @@ router.post("/", protect, upload.single("media"), async (req, res) => {
 
     if (error) return res.status(500).json({ message: error.message });
 
-    // Update posts count
     await supabase
       .from("users")
       .update({ posts_count: (req.user.postsCount || 0) + 1 })
       .eq("id", req.user.id);
 
-    res.status(201).json({ post: await attachUser(post) });
+    res.status(201).json({ post: await attachUser(post, req.user.id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: err.message });
   }
 });
 
+// ====================== SINGLE POST ======================
 router.get("/:id", protect, async (req, res) => {
   try {
     if (!req.params.id || req.params.id === "undefined") {
       return res.status(400).json({ message: "Invalid post id" });
     }
+
     const { data: post, error } = await supabase
       .from("posts")
       .select("*")
@@ -180,6 +207,7 @@ router.get("/:id", protect, async (req, res) => {
         .select("id, username, avatar")
         .eq("id", c.user_id)
         .maybeSingle();
+
       comments.push({
         id: c.id,
         _id: c.id,
@@ -191,59 +219,86 @@ router.get("/:id", protect, async (req, res) => {
       });
     }
 
-    res.json({ post: await attachUser(post), comments });
+    res.json({
+      post: await attachUser(post, req.user.id),
+      comments,
+    });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
+// ====================== LIKE / UNLIKE ======================
 router.post("/:id/like", protect, async (req, res) => {
   try {
     const postId = req.params.id;
+    const userId = req.user.id;
+
     const { data: existing } = await supabase
       .from("likes")
       .select("*")
-      .eq("user_id", req.user.id)
+      .eq("user_id", userId)
       .eq("post_id", postId)
       .maybeSingle();
 
     if (existing) {
+      // Unlike
       await supabase
         .from("likes")
         .delete()
-        .eq("user_id", req.user.id)
+        .eq("user_id", userId)
         .eq("post_id", postId);
+
       const { data: p } = await supabase
         .from("posts")
         .select("likes_count")
         .eq("id", postId)
         .single();
+
       await supabase
         .from("posts")
         .update({ likes_count: Math.max(0, (p?.likes_count || 1) - 1) })
         .eq("id", postId);
+
       return res.json({ liked: false });
     }
 
+    // Like
     await supabase.from("likes").insert({
-      user_id: req.user.id,
+      user_id: userId,
       post_id: postId,
     });
+
     const { data: p } = await supabase
       .from("posts")
-      .select("likes_count")
+      .select("likes_count, user_id")
       .eq("id", postId)
       .single();
+
     await supabase
       .from("posts")
       .update({ likes_count: (p?.likes_count || 0) + 1 })
       .eq("id", postId);
+
+    // Notification to post owner
+    if (p?.user_id && p.user_id !== userId) {
+      await supabase.from("notifications").insert({
+        user_id: p.user_id,
+        from_user_id: userId,
+        type: "like",
+        post_id: postId,
+        message: "liked your post",
+      });
+    }
+
     res.json({ liked: true });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 });
 
+// ====================== COMMENTS ======================
 router.post("/:id/comments", protect, async (req, res) => {
   try {
     const text = (req.body.text || "").trim();
@@ -263,13 +318,25 @@ router.post("/:id/comments", protect, async (req, res) => {
 
     const { data: p } = await supabase
       .from("posts")
-      .select("comments_count")
+      .select("comments_count, user_id")
       .eq("id", req.params.id)
       .single();
+
     await supabase
       .from("posts")
       .update({ comments_count: (p?.comments_count || 0) + 1 })
       .eq("id", req.params.id);
+
+    // Notification to post owner
+    if (p?.user_id && p.user_id !== req.user.id) {
+      await supabase.from("notifications").insert({
+        user_id: p.user_id,
+        from_user_id: req.user.id,
+        type: "comment",
+        post_id: req.params.id,
+        message: "commented on your post",
+      });
+    }
 
     res.status(201).json({
       comment: {
