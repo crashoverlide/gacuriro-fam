@@ -16,6 +16,8 @@ import {
 import { Search } from "@mui/icons-material";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { API_URL } from "../config";
+import { mediaUrl } from "../utils/api";
 
 function Explore() {
   const { token, user } = useAuth();
@@ -29,7 +31,7 @@ function Explore() {
   useEffect(() => {
     const fetchExplore = async () => {
       try {
-        const res = await fetch("http://localhost:5000/api/posts/explore", {
+        const res = await fetch(`${API_URL}/api/posts/explore`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
@@ -43,7 +45,7 @@ function Explore() {
     if (token) fetchExplore();
   }, [token]);
 
-  // Live search users (related names)
+  // Live search users
   useEffect(() => {
     if (!query.trim()) {
       setUsers([]);
@@ -54,12 +56,11 @@ function Explore() {
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
-          `http://localhost:5000/api/users/search?q=${encodeURIComponent(query)}`,
+          `${API_URL}/api/users/search?q=${encodeURIComponent(query)}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         const data = await res.json();
         if (res.ok) {
-          // Filter out current user so you don't see yourself
           const filtered = (data.users || []).filter(
             (u) => u._id !== user?._id && u.username !== user?.username
           );
@@ -130,7 +131,7 @@ function Explore() {
                     sx={{ py: 1.5 }}
                   >
                     <ListItemAvatar>
-                      <Avatar src={u.avatar}>
+                      <Avatar src={mediaUrl(u.avatar)}>
                         {u.username?.[0]?.toUpperCase()}
                       </Avatar>
                     </ListItemAvatar>
@@ -155,9 +156,7 @@ function Explore() {
         <Grid container spacing={0.5}>
           {posts.map((post) => {
             const media = post.media?.[0]?.url || post.image;
-            const fullUrl = media?.startsWith("http")
-              ? media
-              : `http://localhost:5000${media}`;
+            const fullUrl = mediaUrl(media);
             return (
               <Grid item xs={4} key={post._id}>
                 <Box
@@ -170,7 +169,7 @@ function Explore() {
                     bgcolor: "action.hover",
                   }}
                 >
-                  {media && (
+                  {fullUrl && (
                     <img
                       src={fullUrl}
                       alt=""
