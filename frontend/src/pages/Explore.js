@@ -35,7 +35,9 @@ function Explore() {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = await res.json();
-        if (res.ok) setPosts(data.posts || []);
+        if (res.ok) {
+          setPosts(data.posts || []);
+        }
       } catch (err) {
         console.error(err);
       } finally {
@@ -77,16 +79,15 @@ function Explore() {
   }, [query, token, user]);
 
   return (
-    <Box>
+    <Box sx={{ bgcolor: "#000", minHeight: "100vh", color: "#fff" }}>
       {/* Search bar */}
       <Box
         p={2}
         position="sticky"
         top={0}
-        bgcolor="background.paper"
+        bgcolor="#000"
         zIndex={10}
-        borderBottom="1px solid"
-        borderColor="divider"
+        borderBottom="1px solid #222"
       >
         <TextField
           fullWidth
@@ -97,15 +98,20 @@ function Explore() {
           InputProps={{
             startAdornment: (
               <InputAdornment position="start">
-                <Search />
+                <Search sx={{ color: "#888" }} />
               </InputAdornment>
             ),
           }}
           sx={{
             "& .MuiOutlinedInput-root": {
               borderRadius: 3,
-              bgcolor: "action.hover",
+              bgcolor: "#1a1a1a",
+              color: "#fff",
+              "& fieldset": { borderColor: "#333" },
+              "&:hover fieldset": { borderColor: "#ff2d8a" },
+              "&.Mui-focused fieldset": { borderColor: "#ff2d8a" },
             },
+            input: { color: "#fff" },
           }}
         />
       </Box>
@@ -115,16 +121,16 @@ function Explore() {
         <Box>
           {searching ? (
             <Box display="flex" justifyContent="center" py={4}>
-              <CircularProgress size={28} />
+              <CircularProgress size={28} sx={{ color: "#ff2d8a" }} />
             </Box>
           ) : users.length === 0 ? (
-            <Typography textAlign="center" color="text.secondary" py={6}>
+            <Typography textAlign="center" color="#666" py={6}>
               No users found for "{query}"
             </Typography>
           ) : (
             <List>
               {users.map((u) => (
-                <ListItem key={u._id} disablePadding>
+                <ListItem key={u._id || u.id} disablePadding>
                   <ListItemButton
                     component={Link}
                     to={`/${u.username}`}
@@ -137,9 +143,15 @@ function Explore() {
                     </ListItemAvatar>
                     <ListItemText
                       primary={
-                        <Typography fontWeight={600}>{u.username}</Typography>
+                        <Typography fontWeight={600} color="#fff">
+                          {u.username}
+                        </Typography>
                       }
-                      secondary={u.fullName || ""}
+                      secondary={
+                        <Typography color="#888" fontSize={13}>
+                          {u.fullName || u.full_name || ""}
+                        </Typography>
+                      }
                     />
                   </ListItemButton>
                 </ListItem>
@@ -149,36 +161,80 @@ function Explore() {
         </Box>
       ) : loading ? (
         <Box display="flex" justifyContent="center" py={8}>
-          <CircularProgress />
+          <CircularProgress sx={{ color: "#ff2d8a" }} />
         </Box>
+      ) : posts.length === 0 ? (
+        <Typography textAlign="center" color="#666" py={8}>
+          No posts yet. Be the first to post!
+        </Typography>
       ) : (
         /* Explore grid */
-        <Grid container spacing={0.5}>
+        <Grid container spacing={0.5} sx={{ px: 0.5 }}>
           {posts.map((post) => {
-            const media = post.media?.[0]?.url || post.image;
+            const media =
+              post.mediaUrl ||
+              post.media_url ||
+              post.media?.[0]?.url ||
+              post.image ||
+              "";
             const fullUrl = mediaUrl(media);
+            const isVideo =
+              post.isReel ||
+              post.is_reel ||
+              post.mediaType === "video" ||
+              post.media_type === "video" ||
+              /\.(mp4|webm|mov)(\?|$)/i.test(media);
+
             return (
-              <Grid item xs={4} key={post._id}>
+              <Grid item xs={4} key={post._id || post.id}>
                 <Box
                   component={Link}
-                  to={`/${post.user?.username}`}
+                  to={`/post/${post._id || post.id}`}
                   sx={{
                     display: "block",
                     aspectRatio: "1",
                     overflow: "hidden",
-                    bgcolor: "action.hover",
+                    bgcolor: "#111",
+                    position: "relative",
                   }}
                 >
-                  {fullUrl && (
-                    <img
-                      src={fullUrl}
-                      alt=""
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                      }}
-                    />
+                  {fullUrl ? (
+                    isVideo ? (
+                      <video
+                        src={fullUrl}
+                        muted
+                        playsInline
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src={fullUrl}
+                        alt=""
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        onError={(e) => {
+                          e.target.style.display = "none";
+                        }}
+                      />
+                    )
+                  ) : (
+                    <Box
+                      display="flex"
+                      alignItems="center"
+                      justifyContent="center"
+                      height="100%"
+                      color="#444"
+                      fontSize={12}
+                    >
+                      No media
+                    </Box>
                   )}
                 </Box>
               </Grid>
