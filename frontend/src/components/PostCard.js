@@ -26,20 +26,14 @@ import {
   Favorite,
   ChatBubbleOutline,
   Send,
-  Repeat,
   MoreHoriz,
 } from "@mui/icons-material";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { API_URL } from "../config";
+import { mediaUrl } from "../utils/api";
 
-function mediaSrc(url) {
-  if (!url) return "";
-  if (url.startsWith("http") || url.startsWith("blob:")) return url;
-  return `${API_URL}${url.startsWith("/") ? "" : "/"}${url}`;
-}
-
-function PostCard({ post, showCommentsInline = false }) {
+function PostCard({ post }) {
   const { token, user } = useAuth();
   const navigate = useNavigate();
   const lastTap = useRef(0);
@@ -59,31 +53,40 @@ function PostCard({ post, showCommentsInline = false }) {
   const author = post?.user || {};
   const username = author.username || "user";
   const postId = post?.id || post?._id;
+
   const raw =
-    post?.mediaUrl || post?.media_url || post?.media?.url || "";
-  const src = mediaSrc(raw);
+    post?.mediaUrl ||
+    post?.media_url ||
+    post?.media?.[0]?.url ||
+    post?.image ||
+    "";
+  const src = mediaUrl(raw);
+
   const isVideo =
     post?.isReel ||
     post?.is_reel ||
     post?.mediaType === "video" ||
     post?.media_type === "video" ||
-    /\.(mp4|webm|mov)(\?|$)/i.test(raw);
+    /\.(mp4|webm|mov)(\?|$)/i.test(raw || "");
 
   const doLike = async () => {
     if (!postId) return;
     const next = !liked;
     setLiked(next);
     setLikes((n) => Math.max(0, n + (next ? 1 : -1)));
+
     if (next) {
       setShowHeart(true);
-      setTimeout(() => setShowHeart(false), 700);
+      setTimeout(() => setShowHeart(false), 800);
     }
+
     try {
       await fetch(`${API_URL}/api/posts/${postId}/like`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
     } catch {
+      // rollback if failed
       setLiked(!next);
       setLikes((n) => Math.max(0, n + (next ? -1 : 1)));
     }
@@ -95,7 +98,7 @@ function PostCard({ post, showCommentsInline = false }) {
       if (!liked) doLike();
       else {
         setShowHeart(true);
-        setTimeout(() => setShowHeart(false), 700);
+        setTimeout(() => setShowHeart(false), 800);
       }
     }
     lastTap.current = now;
@@ -213,7 +216,7 @@ function PostCard({ post, showCommentsInline = false }) {
       <CardHeader
         avatar={
           <Avatar
-            src={mediaSrc(author.avatar)}
+            src={mediaUrl(author.avatar)}
             component={Link}
             to={`/${username}`}
             sx={{ width: 36, height: 36, bgcolor: "#333" }}
@@ -276,6 +279,7 @@ function PostCard({ post, showCommentsInline = false }) {
         sx={{ py: 1, px: 1.5 }}
       />
 
+      {/* Media */}
       <Box
         onClick={onMediaTap}
         sx={{
@@ -291,7 +295,7 @@ function PostCard({ post, showCommentsInline = false }) {
         }}
       >
         {!src || imgError ? (
-          <Typography color="#666" fontSize={13}>
+          <Typography color="#555" fontSize={13}>
             Media unavailable
           </Typography>
         ) : isVideo ? (
@@ -302,7 +306,6 @@ function PostCard({ post, showCommentsInline = false }) {
             loop
             playsInline
             preload="auto"
-            controls={false}
             style={{
               width: "100%",
               maxHeight: 560,
@@ -325,6 +328,7 @@ function PostCard({ post, showCommentsInline = false }) {
           />
         )}
 
+        {/* Double-tap heart animation */}
         <Fade in={showHeart}>
           <Box
             sx={{
@@ -336,20 +340,18 @@ function PostCard({ post, showCommentsInline = false }) {
               pointerEvents: "none",
             }}
           >
-            <Favorite sx={{ fontSize: 90, color: "#fff" }} />
+            <Favorite sx={{ fontSize: 90, color: "#fff", filter: "drop-shadow(0 0 8px rgba(0,0,0,0.5))" }} />
           </Box>
         </Fade>
       </Box>
 
+      {/* Actions */}
       <Box display="flex" alignItems="center" px={0.5} pt={0.5}>
         <IconButton onClick={doLike} sx={{ color: liked ? "#ff2d8a" : "#fff" }}>
           {liked ? <Favorite /> : <FavoriteBorder />}
         </IconButton>
         <IconButton onClick={openComments} sx={{ color: "#fff" }}>
           <ChatBubbleOutline />
-        </IconButton>
-        <IconButton sx={{ color: "#fff" }}>
-          <Repeat />
         </IconButton>
         <IconButton onClick={openShare} sx={{ color: "#fff" }}>
           <Send />
@@ -378,7 +380,7 @@ function PostCard({ post, showCommentsInline = false }) {
         </Typography>
       </CardContent>
 
-      {/* Comments sheet */}
+      {/* Comments Dialog */}
       <Dialog
         open={commentsOpen}
         onClose={() => setCommentsOpen(false)}
@@ -394,7 +396,10 @@ function PostCard({ post, showCommentsInline = false }) {
           ) : (
             comments.map((c) => (
               <Box key={c.id || c._id} display="flex" gap={1} mb={1.5}>
-                <Avatar src={mediaSrc(c.user?.avatar)} sx={{ width: 32, height: 32 }}>
+                <Avatar
+                  src={mediaUrl(c.user?.avatar)}
+                  sx={{ width: 32, height: 32 }}
+                >
                   {(c.user?.username || "U")[0]}
                 </Avatar>
                 <Typography fontSize={14}>
@@ -417,7 +422,7 @@ function PostCard({ post, showCommentsInline = false }) {
         </DialogContent>
       </Dialog>
 
-      {/* Send to following */}
+      {/* Share Dialog */}
       <Dialog
         open={shareOpen}
         onClose={() => setShareOpen(false)}
@@ -443,14 +448,11 @@ function PostCard({ post, showCommentsInline = false }) {
                   onClick={() => sendToUser(u)}
                 >
                   <ListItemAvatar>
-                    <Avatar src={mediaSrc(u.avatar)}>
+                    <Avatar src={mediaUrl(u.avatar)}>
                       {(u.username || "U")[0]}
                     </Avatar>
                   </ListItemAvatar>
-                  <ListItemText
-                    primary={u.username}
-                    secondary={u.fullName || ""}
-                  />
+                  <ListItemText primary={u.username} />
                 </ListItem>
               ))}
             </List>
