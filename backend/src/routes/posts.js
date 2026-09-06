@@ -1,24 +1,15 @@
 import express from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
 import { supabase } from "../config/supabase.js";
 import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadDir = path.join(__dirname, "../../uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    cb(null, `post_${Date.now()}${path.extname(file.originalname) || ".jpg"}`);
-  },
+// Use memory storage so we can upload the buffer to Supabase
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
 });
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
 async function attachUser(post) {
   const { data: user } = await supabase
@@ -97,12 +88,37 @@ router.get("/reels", protect, async (req, res) => {
   }
 });
 
+// ========== UPLOAD TO SUPABASE STORAGE ==========
 router.post("/", protect, upload.single("media"), async (req, res) => {
   try {
-    const mediaUrl = req.file ? `/uploads/${req.file.filename}` : "";
-    const mediaType = req.file?.mimetype?.startsWith("video")
-      ? "video"
-      : "image";
+    let mediaUrl = "";
+    let mediaType = "image";
+
+    if (req.file) {
+      const ext = req.file.originalname.split(".").pop() || "jpg";
+      const fileName = `${req.user.id}/${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("media")
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error("Storage upload error:", uploadError);
+        return res.status(500).json({ message: uploadError.message });
+      }
+
+      // Get public URL
+      const { data: publicData } = supabase.storage
+        .from("media")
+        .getPublicUrl(fileName);
+
+      mediaUrl = publicData.publicUrl;
+      mediaType = req.file.mimetype.startsWith("video") ? "video" : "image";
+    }
+
     const isReel =
       req.body.isReel === "true" ||
       req.body.isReel === true ||
@@ -123,6 +139,7 @@ router.post("/", protect, upload.single("media"), async (req, res) => {
 
     if (error) return res.status(500).json({ message: error.message });
 
+    // Update posts count
     await supabase
       .from("users")
       .update({ posts_count: (req.user.postsCount || 0) + 1 })
@@ -130,6 +147,7 @@ router.post("/", protect, upload.single("media"), async (req, res) => {
 
     res.status(201).json({ post: await attachUser(post) });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: err.message });
   }
 });
