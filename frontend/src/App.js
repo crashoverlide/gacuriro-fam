@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, useState } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Box, CircularProgress, useMediaQuery, useTheme } from "@mui/material";
 import { useAuth } from "./context/AuthContext";
@@ -9,6 +9,7 @@ import Sidebar from "./components/Sidebar";
 import BottomNav from "./components/BottomNav";
 import MobileHeader from "./components/MobileHeader";
 import InstallPrompt from "./components/InstallPrompt";
+import SplashScreen from "./components/SplashScreen";
 
 const Home = lazy(() => import("./pages/Home"));
 const Explore = lazy(() => import("./pages/Explore"));
@@ -60,7 +61,13 @@ function AppShell({ children }) {
   const isMobile = useMediaQuery(theme.breakpoints.down("md"));
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh", bgcolor: "background.default" }}>
+    <Box
+      sx={{
+        display: "flex",
+        minHeight: "100vh",
+        bgcolor: "background.default",
+      }}
+    >
       {!isMobile && <Sidebar />}
       <Box
         sx={{
@@ -80,15 +87,23 @@ function AppShell({ children }) {
 
 function PageLoader() {
   return (
-    <Box display="flex" justifyContent="center" alignItems="center" minHeight="50vh">
+    <Box
+      display="flex"
+      justifyContent="center"
+      alignItems="center"
+      minHeight="50vh"
+    >
       <CircularProgress size={28} sx={{ color: "#ff2d8a" }} />
     </Box>
   );
 }
 
 function App() {
+  const [splash, setSplash] = useState(true);
+
   return (
     <>
+      {splash && <SplashScreen onDone={() => setSplash(false)} />}
       <InstallPrompt />
       <Suspense fallback={<PageLoader />}>
         <Routes>
