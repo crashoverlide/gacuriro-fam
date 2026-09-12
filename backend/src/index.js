@@ -1,22 +1,21 @@
-import "dotenv/config";
 import express from "express";
-import cors from "cors";
 import http from "http";
+import cors from "cors";
+import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Server } from "socket.io";
-import { supabase } from "./config/supabase.js";
 
 import authRoutes from "./routes/auth.js";
-import usersRoutes from "./routes/users.js";
 import postsRoutes from "./routes/posts.js";
-import storiesRoutes from "./routes/stories.js";
+import usersRoutes from "./routes/users.js";
 import messagesRoutes from "./routes/messages.js";
-import notificationsRoutes from "./routes/notifications.js";
-import callsRoutes from "./routes/calls.js";
-import famLinksRoutes from "./routes/famLinks.js";
+import storiesRoutes from "./routes/stories.js";
 import futureDropsRoutes from "./routes/futureDrops.js";
 import liveRoutes from "./routes/live.js";
+import famRoutes from "./routes/fam.js";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,181 +23,108 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const httpServer = http.createServer(app);
 
+const CLIENT_URL = process.env.CLIENT_URL || "*";
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
+
+// static uploads
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+
+// health
+app.get("/health", (req, res) => {
+  res.json({ ok: true, service: "gacuriro-api" });
+});
+
+// API routes
+app.use("/api/auth", authRoutes);
+app.use("/api/posts", postsRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/messages", messagesRoutes);
+app.use("/api/stories", storiesRoutes);
+app.use("/api/future-drops", futureDropsRoutes);
+app.use("/api/live", liveRoutes);
+app.use("/api/fam", famRoutes);
+
+// Socket.IO
 const io = new Server(httpServer, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    methods: ["GET", "POST", "PUT", "DELETE"],
   },
-  transports: ["polling", "websocket"],
-  allowEIO3: true,
+  transports: ["websocket", "polling"],
 });
 
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
-
-app.get("/", (_req, res) => res.json({ ok: true, db: "supabase" }));
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-app.use("/api/auth", authRoutes);
-app.use("/api/users", usersRoutes);
-app.use("/api/posts", postsRoutes);
-app.use("/api/stories", storiesRoutes);
-app.use("/api/messages", messagesRoutes);
-app.use("/api/notifications", notificationsRoutes);
-app.use("/api/calls", callsRoutes);
-app.use("/api/fam-links", famLinksRoutes);
-app.use("/api/future-drops", futureDropsRoutes);
-app.use("/api/live", liveRoutes);
-
-const onlineUsers = new Map();
+const onlineUsers = new Map(); // userId -> socketId
 
 io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
-  socket.on("user:online", async (userId) => {
+  socket.on("user:online", (userId) => {
     if (!userId) return;
-    const id = String(userId);
-    onlineUsers.set(id, socket.id);
-    socket.userId = id;
-    console.log("User online:", id, "->", socket.id);
-
-    try {
-      const { data: missed } = await supabase
-        .from("call_logs")
-        .select("*")
-        .eq("callee_id", id)
-        .eq("status", "missed")
-        .eq("seen", false)
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      if (missed?.length) {
-        socket.emit("call:missed", { calls: missed });
-      }
-    } catch (e) {
-      console.error("missed calls", e.message);
-    }
+    onlineUsers.set(String(userId), socket.id);
+    socket.userId = String(userId);
+    console.log("User online:", userId, "->", socket.id);
   });
 
-  // ——— 1:1 / group calls ———
   socket.on("call:invite", (payload) => {
-    const targets = payload?.targetIds || [];
-    let sent = false;
-    for (const tid of targets) {
-      const sid = onlineUsers.get(String(tid));
+    const targets = payload?.to || payload?.targets || [];
+    const list = Array.isArray(targets) ? targets : [targets];
+    let sent = 0;
+    list.forEach((uid) => {
+      const sid = onlineUsers.get(String(uid));
       if (sid) {
         io.to(sid).emit("call:incoming", {
           ...payload,
-          fromSocketId: socket.id,
+          from: socket.userId,
         });
-        sent = true;
+        sent++;
       }
-    }
+    });
     if (!sent) {
-      console.log("Call: no online targets", targets);
-      socket.emit("call:error", { message: "User offline" });
+      console.log("Call: no online targets", list);
+      socket.emit("call:unavailable", { targets: list });
     }
   });
 
-  socket.on("call:accept", (payload) => {
-    if (payload?.toSocketId) {
-      io.to(payload.toSocketId).emit("call:accepted", {
+  socket.on("call:signal", (payload) => {
+    const to = payload?.to;
+    const sid = onlineUsers.get(String(to));
+    if (sid) {
+      io.to(sid).emit("call:signal", {
         ...payload,
-        fromSocketId: socket.id,
-      });
-    }
-  });
-
-  socket.on("call:offer", (payload) => {
-    if (payload?.toSocketId) {
-      io.to(payload.toSocketId).emit("call:offer", {
-        sdp: payload.sdp,
-        fromSocketId: socket.id,
-      });
-    }
-  });
-
-  socket.on("call:answer", (payload) => {
-    if (payload?.toSocketId) {
-      io.to(payload.toSocketId).emit("call:answer", {
-        sdp: payload.sdp,
-        fromSocketId: socket.id,
-      });
-    }
-  });
-
-  socket.on("call:ice", (payload) => {
-    if (payload?.toSocketId) {
-      io.to(payload.toSocketId).emit("call:ice", {
-        candidate: payload.candidate,
-        fromSocketId: socket.id,
+        from: socket.userId,
       });
     }
   });
 
   socket.on("call:end", (payload) => {
-    if (payload?.toSocketId) {
-      io.to(payload.toSocketId).emit("call:end", {
-        fromSocketId: socket.id,
-      });
-    }
+    const to = payload?.to;
+    const sid = onlineUsers.get(String(to));
+    if (sid) io.to(sid).emit("call:end", { from: socket.userId });
   });
 
-  // ——— Live Perspective rooms + WebRTC signal mesh ———
-  socket.on("live:join", ({ sessionId, userId }) => {
-    if (!sessionId) return;
-    socket.join(`live:${sessionId}`);
-    socket.liveSessionId = sessionId;
-    socket.to(`live:${sessionId}`).emit("live:peer-joined", {
-      userId,
-      socketId: socket.id,
-    });
-  });
-
-  socket.on("live:leave", ({ sessionId }) => {
-    const room = sessionId || socket.liveSessionId;
-    if (!room) return;
-    socket.leave(`live:${room}`);
-    socket.to(`live:${room}`).emit("live:peer-left", {
-      socketId: socket.id,
-      userId: socket.userId,
-    });
-  });
-
-  socket.on("live:signal", ({ sessionId, toSocketId, data }) => {
-    if (toSocketId) {
-      io.to(toSocketId).emit("live:signal", {
-        fromSocketId: socket.id,
-        data,
-      });
-      return;
-    }
-    const room = sessionId || socket.liveSessionId;
+  socket.on("live:signal", (payload) => {
+    const room = payload?.sessionId || payload?.room;
     if (room) {
-      socket.to(`live:${room}`).emit("live:signal", {
-        fromSocketId: socket.id,
-        data,
+      socket.to(room).emit("live:signal", {
+        ...payload,
+        from: socket.userId,
       });
     }
   });
 
-  socket.on("live:camera-update", ({ sessionId }) => {
-    const room = sessionId || socket.liveSessionId;
-    if (!room) return;
-    socket.to(`live:${room}`).emit("live:camera-update", {
-      sessionId: room,
-    });
+  socket.on("live:join", (sessionId) => {
+    if (sessionId) socket.join(String(sessionId));
   });
 
   socket.on("disconnect", () => {
-    if (socket.liveSessionId) {
-      socket.to(`live:${socket.liveSessionId}`).emit("live:peer-left", {
-        socketId: socket.id,
-        userId: socket.userId,
-      });
-    }
     if (socket.userId) {
       onlineUsers.delete(socket.userId);
       console.log("User offline (disconnect):", socket.userId);
@@ -207,7 +133,9 @@ io.on("connection", (socket) => {
   });
 });
 
+app.set("io", io);
+
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on http://0.0.0.0:${PORT} (Supabase DB)`);
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
