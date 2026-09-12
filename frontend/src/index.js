@@ -7,30 +7,38 @@ import { AuthProvider } from "./context/AuthContext";
 
 const theme = createTheme({
   palette: {
-    mode: "dark",
-    primary: { main: "#ff4d9e", dark: "#c026ff" },
-    secondary: { main: "#c026ff" },
-    background: { default: "#000", paper: "#121212" },
-    text: { primary: "#fff", secondary: "#a8a8a8" },
-    divider: "#262626",
+    mode: "light",
+    primary: {
+      main: "#6C4DF6",
+      dark: "#5535D9",
+    },
+    secondary: {
+      main: "#ff2d8a",
+    },
+    background: {
+      default: "#FAFAFA",
+      paper: "#FFFFFF",
+    },
+    text: {
+      primary: "#111111",
+      secondary: "#6B6B73",
+    },
+    divider: "#E7E7EB",
   },
   typography: {
     fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-    button: { textTransform: "none", fontWeight: 600 },
+      '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   },
-  shape: { borderRadius: 12 },
+  shape: {
+    borderRadius: 10,
+  },
 });
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
+
 root.render(
   <React.StrictMode>
-    <BrowserRouter
-      future={{
-        v7_startTransition: true,
-        v7_relativeSplatPath: true,
-      }}
-    >
+    <BrowserRouter>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <AuthProvider>
@@ -40,3 +48,10 @@ root.render(
     </BrowserRouter>
   </React.StrictMode>
 );
+
+// PWA service worker
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
