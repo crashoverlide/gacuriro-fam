@@ -1,28 +1,42 @@
-import { API_URL } from "../config";
+const API_URL =
+  process.env.REACT_APP_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "http://localhost:5000"
+    : "https://gacuriro-api.onrender.com");
 
 export function mediaUrl(path) {
-  if (!path) return undefined;
-  const p = String(path);
-  if (p.startsWith("http://") || p.startsWith("https://") || p.startsWith("blob:")) {
-    return p;
+  if (!path) return "";
+  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("blob:")) {
+    return path;
   }
-  // Always absolute so phone + PC both load media from the API host
-  return `${API_URL}${p.startsWith("/") ? p : `/${p}`}`;
+  const base = API_URL.replace(/\/$/, "");
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${p}`;
 }
 
-export async function api(path, { token, method = "GET", body, formData } = {}) {
-  const headers = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (body && !formData) headers["Content-Type"] = "application/json";
+export async function api(path, options = {}) {
+  const token = localStorage.getItem("token");
+  const headers = {
+    ...(options.headers || {}),
+  };
 
-  const res = await fetch(`${API_URL}${path.startsWith("/") ? path : `/${path}`}`, {
-    method,
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+  }
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const url = path.startsWith("http") ? path : `${API_URL}${path.startsWith("/") ? path : `/${path}`}`;
+
+  const res = await fetch(url, {
+    ...options,
     headers,
-    body: formData ? formData : body ? JSON.stringify(body) : undefined,
   });
 
-  const data = await res.json().catch(() => ({}));
-  return { res, data };
+  return res;
 }
 
-export default api;
+export { API_URL };
+export default API_URL;
