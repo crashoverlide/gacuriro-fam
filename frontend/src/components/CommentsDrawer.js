@@ -1,189 +1,155 @@
 import React, { useEffect, useState, useRef } from "react";
 import {
-  Drawer,
   Box,
+  Drawer,
+  Dialog,
   Typography,
   IconButton,
   Avatar,
   TextField,
   CircularProgress,
   useMediaQuery,
-  useTheme,
-  Dialog,
-  keyframes,
+  Button,
 } from "@mui/material";
-import {
-  Close,
-  FavoriteBorder,
-  Favorite,
-  Send,
-  Mood,
-} from "@mui/icons-material";
+import { Close, FavoriteBorder, Favorite, Send } from "@mui/icons-material";
 import { Link } from "react-router-dom";
+import { useTheme } from "@mui/material/styles";
 import { useAuth } from "../context/AuthContext";
 import { API_URL, mediaUrl } from "../utils/api";
+import { formatDistanceToNow } from "date-fns";
 
-const slideUp = keyframes`
-  from { transform: translateY(100%); opacity: 0.6; }
-  to { transform: translateY(0); opacity: 1; }
-`;
-
-function timeAgo(date) {
-  if (!date) return "";
-  const d = new Date(date);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 60) return "now";
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
+function timeAgo(d) {
+  try {
+    return formatDistanceToNow(new Date(d), { addSuffix: true });
+  } catch {
+    return "";
+  }
 }
 
 function CommentRow({ c, onLike, onReply }) {
-  const src = (a) => {
-    if (!a) return undefined;
-    if (a.startsWith("http")) return a;
-    return mediaUrl ? mediaUrl(a) : `${API_URL}${a}`;
-  };
-  const u = c.user || {};
-  const username = u.username || c.username || "user";
+  const liked = !!c.liked_by_me;
+  const user = c.user || c.author || {};
+  const name = user.username || user.fullName || "user";
+  const avatar = user.avatar ? mediaUrl(user.avatar) : undefined;
 
   return (
     <Box display="flex" gap={1.2} px={2} py={1.2} alignItems="flex-start">
       <Avatar
         component={Link}
-        to={`/${username}`}
-        src={src(u.avatar)}
-        sx={{ width: 36, height: 36, mt: 0.3 }}
-      />
+        to={`/${name}`}
+        src={avatar}
+        sx={{ width: 32, height: 32, mt: 0.3 }}
+      >
+        {name[0]?.toUpperCase()}
+      </Avatar>
       <Box flex={1} minWidth={0}>
-        <Typography fontSize={13} sx={{ wordBreak: "break-word" }}>
-          <Typography
+        <Typography fontSize={13} sx={{ lineHeight: 1.35, color: "#f5f5f5" }}>
+          <Box
             component={Link}
-            to={`/${username}`}
-            fontWeight={700}
-            fontSize={13}
-            color="inherit"
-            sx={{ textDecoration: "none", mr: 0.6 }}
+            to={`/${name}`}
+            sx={{
+              fontWeight: 700,
+              color: "#fff",
+              textDecoration: "none",
+              mr: 0.7,
+            }}
           >
-            {username}
-          </Typography>
-          {c.text || c.content || c.body}
+            {name}
+          </Box>
+          {c.text}
         </Typography>
         <Box display="flex" alignItems="center" gap={1.5} mt={0.5}>
-          <Typography fontSize={11} color="text.secondary">
+          <Typography fontSize={11} color="#9a9a9a">
             {timeAgo(c.created_at || c.createdAt)}
           </Typography>
           {(c.likes_count > 0 || c.likesCount > 0) && (
-            <Typography fontSize={11} color="text.secondary" fontWeight={600}>
+            <Typography fontSize={11} color="#9a9a9a" fontWeight={600}>
               {c.likes_count || c.likesCount} likes
             </Typography>
           )}
           <Typography
             fontSize={11}
-            color="text.secondary"
-            fontWeight={600}
+            color="#cfcfcf"
+            fontWeight={700}
             sx={{ cursor: "pointer" }}
             onClick={() => onReply(c)}
           >
             Reply
           </Typography>
         </Box>
-
-        {/* nested replies */}
         {(c.replies || []).map((r) => (
-          <Box key={r.id || r._id} display="flex" gap={1} mt={1.2} ml={0.5}>
-            <Avatar
-              src={src(r.user?.avatar)}
-              sx={{ width: 28, height: 28 }}
-            />
-            <Box>
-              <Typography fontSize={12}>
-                <b>{r.user?.username || r.username}</b> {r.text || r.content}
-              </Typography>
-              <Typography fontSize={10} color="text.secondary" mt={0.3}>
-                {timeAgo(r.created_at || r.createdAt)}
-              </Typography>
-            </Box>
+          <Box key={r.id || r._id} mt={1.2} ml={0.5}>
+            <CommentRow c={r} onLike={onLike} onReply={onReply} />
           </Box>
         ))}
       </Box>
-      <IconButton size="small" onClick={() => onLike(c)} sx={{ mt: 0.5 }}>
-        {c.liked || c.isLiked ? (
-          <Favorite sx={{ fontSize: 14, color: "#ff2d55" }} />
+      <IconButton size="small" onClick={() => onLike(c)} sx={{ mt: 0.2 }}>
+        {liked ? (
+          <Favorite sx={{ fontSize: 16, color: "#ff2d8a" }} />
         ) : (
-          <FavoriteBorder sx={{ fontSize: 14 }} />
+          <FavoriteBorder sx={{ fontSize: 16, color: "#ccc" }} />
         )}
       </IconButton>
     </Box>
   );
 }
 
-function CommentsBody({
-  postId,
-  comments,
-  setComments,
-  loading,
-  onClose,
-  showClose,
-}) {
+function CommentsDrawer({ open, onClose, postId, postMedia, isVideo }) {
+  const theme = useTheme();
+  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
   const { token, user } = useAuth();
+  const [comments, setComments] = useState([]);
   const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
-  const listRef = useRef(null);
   const inputRef = useRef(null);
 
-  const src = (a) => {
-    if (!a) return undefined;
-    if (typeof a === "string" && a.startsWith("http")) return a;
-    if (!a) return undefined;
-    return mediaUrl ? mediaUrl(a) : `${API_URL}${a}`;
+  const load = async () => {
+    if (!postId || !token) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/posts/${postId}/comments`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setComments(data.comments || data || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const send = async () => {
-    if (!text.trim() || sending) return;
+  useEffect(() => {
+    if (open) {
+      load();
+      setReplyTo(null);
+      setText("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, postId]);
+
+  const submit = async () => {
+    const body = text.trim();
+    if (!body || !postId || sending) return;
     setSending(true);
     try {
-      const body = {
-        text: text.trim(),
-        parentId: replyTo?.id || replyTo?._id || null,
-      };
       const res = await fetch(`${API_URL}/api/posts/${postId}/comments`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          text: body,
+          parentId: replyTo?.id || replyTo?._id || null,
+        }),
       });
-      const data = await res.json();
       if (res.ok) {
-        const c = data.comment || data;
-        if (replyTo) {
-          setComments((prev) =>
-            prev.map((item) => {
-              const id = item.id || item._id;
-              const pid = replyTo.id || replyTo._id;
-              if (id === pid) {
-                return {
-                  ...item,
-                  replies: [...(item.replies || []), c],
-                };
-              }
-              return item;
-            })
-          );
-        } else {
-          setComments((prev) => [...prev, c]);
-        }
         setText("");
         setReplyTo(null);
-        setTimeout(() => {
-          listRef.current?.scrollTo({
-            top: listRef.current.scrollHeight,
-            behavior: "smooth",
-          });
-        }, 50);
+        await load();
       }
     } catch (e) {
       console.error(e);
@@ -195,80 +161,60 @@ function CommentsBody({
   const likeComment = async (c) => {
     const id = c.id || c._id;
     try {
-      await fetch(`${API_URL}/api/posts/comments/${id}/like`, {
+      const res = await fetch(`${API_URL}/api/posts/comments/${id}/like`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      setComments((prev) =>
-        prev.map((item) => {
-          if ((item.id || item._id) === id) {
-            const liked = !(item.liked || item.isLiked);
-            return {
-              ...item,
-              liked,
-              isLiked: liked,
-              likes_count: Math.max(
-                0,
-                (item.likes_count || item.likesCount || 0) + (liked ? 1 : -1)
-              ),
-            };
-          }
-          return item;
-        })
-      );
+      if (res.ok) await load();
     } catch (e) {
-      // optimistic still ok
-      setComments((prev) =>
-        prev.map((item) =>
-          (item.id || item._id) === id
-            ? { ...item, liked: !item.liked, isLiked: !item.isLiked }
-            : item
-        )
-      );
+      console.error(e);
     }
   };
 
-  const startReply = (c) => {
+  const onReply = (c) => {
     setReplyTo(c);
-    setTimeout(() => inputRef.current?.focus(), 100);
+    setTimeout(() => inputRef.current?.focus(), 80);
   };
 
-  return (
-    <Box display="flex" flexDirection="column" height="100%">
-      {/* header */}
+  const mediaSrc = postMedia ? mediaUrl(postMedia) : "";
+
+  const panelBg = "#121212";
+  const pink = "#ff2d8a";
+
+  const list = (
+    <Box
+      display="flex"
+      flexDirection="column"
+      height="100%"
+      sx={{ bgcolor: panelBg, color: "#fff" }}
+    >
       <Box
         display="flex"
         alignItems="center"
-        justifyContent="center"
-        position="relative"
-        py={1.5}
-        borderBottom="1px solid #efefef"
+        justifyContent="space-between"
+        px={2}
+        py={1.2}
+        borderBottom="1px solid #2a2a2a"
       >
-        <Typography fontWeight={800} fontSize={15}>
+        <Typography fontWeight={800} color="#fff">
           Comments
         </Typography>
-        {showClose && (
-          <IconButton
-            onClick={onClose}
-            sx={{ position: "absolute", right: 8, top: 6 }}
-          >
-            <Close />
-          </IconButton>
-        )}
+        <IconButton onClick={onClose} size="small" sx={{ color: "#fff" }}>
+          <Close />
+        </IconButton>
       </Box>
 
-      {/* list */}
-      <Box ref={listRef} flex={1} overflow="auto">
+      <Box flex={1} overflow="auto">
         {loading ? (
           <Box display="flex" justifyContent="center" py={6}>
-            <CircularProgress size={26} sx={{ color: "#ff2d8a" }} />
+            <CircularProgress size={28} sx={{ color: pink }} />
           </Box>
-        ) : comments.length === 0 ? (
+        ) : !comments.length ? (
           <Box textAlign="center" py={6} px={3}>
-            <Typography fontWeight={800} fontSize={18} mb={0.5}>
+            <Typography fontWeight={800} mb={0.5} color="#fff">
               No comments yet
             </Typography>
-            <Typography color="text.secondary" fontSize={13}>
+            <Typography color="#9a9a9a" fontSize={14}>
               Start the conversation.
             </Typography>
           </Box>
@@ -278,193 +224,143 @@ function CommentsBody({
               key={c.id || c._id}
               c={c}
               onLike={likeComment}
-              onReply={startReply}
+              onReply={onReply}
             />
           ))
         )}
       </Box>
 
-      {/* reply chip */}
       {replyTo && (
         <Box
           px={2}
-          py={0.8}
-          bgcolor="#fafafa"
-          borderTop="1px solid #efefef"
+          pt={1}
           display="flex"
-          alignItems="center"
           justifyContent="space-between"
+          alignItems="center"
+          borderTop="1px solid #2a2a2a"
         >
-          <Typography fontSize={12} color="text.secondary">
-            Replying to{" "}
-            <b>@{replyTo.user?.username || replyTo.username}</b>
+          <Typography fontSize={12} color="#aaa">
+            Replying to @
+            {(replyTo.user || replyTo.author || {}).username || "user"}
           </Typography>
-          <IconButton size="small" onClick={() => setReplyTo(null)}>
-            <Close fontSize="small" />
-          </IconButton>
+          <Button size="small" onClick={() => setReplyTo(null)} sx={{ color: pink }}>
+            Cancel
+          </Button>
         </Box>
       )}
 
-      {/* input */}
       <Box
         display="flex"
         alignItems="center"
         gap={1}
-        px={1.5}
-        py={1.2}
-        borderTop="1px solid #efefef"
+        p={1.5}
+        borderTop="1px solid #2a2a2a"
+        bgcolor="#0d0d0d"
       >
-        <Avatar src={src(user?.avatar)} sx={{ width: 32, height: 32 }} />
-        <Mood sx={{ color: "#8e8e8e", fontSize: 22 }} />
+        <Avatar
+          src={user?.avatar ? mediaUrl(user.avatar) : undefined}
+          sx={{ width: 32, height: 32 }}
+        >
+          {(user?.username || "?")[0]?.toUpperCase()}
+        </Avatar>
         <TextField
           inputRef={inputRef}
           fullWidth
-          variant="standard"
-          placeholder={
-            replyTo
-              ? `Reply to @${replyTo.user?.username || replyTo.username}...`
-              : "Add a comment..."
-          }
+          size="small"
+          placeholder="Add a comment..."
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-          InputProps={{ disableUnderline: true }}
-          sx={{ fontSize: 14 }}
-        />
-        <Typography
-          onClick={send}
-          sx={{
-            color: text.trim() ? "#0095f6" : "#b2dffc",
-            fontWeight: 700,
-            fontSize: 14,
-            cursor: text.trim() ? "pointer" : "default",
-            userSelect: "none",
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
           }}
+          sx={{
+            "& .MuiOutlinedInput-root": {
+              borderRadius: 5,
+              color: "#fff",
+              bgcolor: "#1a1a1a",
+              "& fieldset": { borderColor: "#333" },
+              "&:hover fieldset": { borderColor: pink },
+              "&.Mui-focused fieldset": { borderColor: pink },
+            },
+            "& .MuiInputBase-input::placeholder": { color: "#888", opacity: 1 },
+          }}
+        />
+        <IconButton
+          onClick={submit}
+          disabled={sending || !text.trim()}
+          sx={{ color: pink }}
         >
-          Post
-        </Typography>
+          {sending ? <CircularProgress size={18} sx={{ color: pink }} /> : <Send />}
+        </IconButton>
       </Box>
     </Box>
   );
-}
 
-function CommentsDrawer({ open, onClose, postId, postMedia, isVideo }) {
-  const theme = useTheme();
-  const isDesktop = useMediaQuery(theme.breakpoints.up("md"));
-  const { token } = useAuth();
-  const [comments, setComments] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  const src = (url) => {
-    if (!url) return "";
-    if (url.startsWith("http")) return url;
-    return mediaUrl ? mediaUrl(url) : `${API_URL}${url}`;
-  };
-
-  useEffect(() => {
-    if (!open || !postId) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_URL}/api/posts/${postId}/comments`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!cancelled && res.ok) {
-          setComments(data.comments || data || []);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, postId, token]);
-
-  // Desktop Instagram layout: media | comments
   if (isDesktop) {
     return (
       <Dialog
         open={open}
         onClose={onClose}
-        maxWidth="lg"
+        maxWidth="md"
         fullWidth
         PaperProps={{
           sx: {
-            height: "90vh",
-            maxHeight: 900,
+            height: "min(90vh, 720px)",
+            maxHeight: "90vh",
             borderRadius: 2,
             overflow: "hidden",
-            display: "flex",
-            flexDirection: "row",
+            bgcolor: "#000",
           },
         }}
       >
-        <Box
-          sx={{
-            flex: "1 1 55%",
-            bgcolor: "#000",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: 0,
-          }}
-        >
-          {postMedia ? (
-            isVideo ? (
-              <video
-                src={src(postMedia)}
-                controls
-                style={{ maxWidth: "100%", maxHeight: "100%" }}
-              />
-            ) : (
-              <img
-                src={src(postMedia)}
-                alt=""
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            )
-          ) : null}
-        </Box>
-        <Box
-          sx={{
-            flex: "1 1 45%",
-            maxWidth: 420,
-            borderLeft: "1px solid #efefef",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <CommentsBody
-            postId={postId}
-            comments={comments}
-            setComments={setComments}
-            loading={loading}
-            onClose={onClose}
-            showClose
-          />
+        <Box display="flex" height="100%">
+          <Box
+            flex={1.2}
+            bgcolor="#000"
+            display="flex"
+            alignItems="center"
+            justifyContent="center"
+            minWidth={0}
+          >
+            {mediaSrc ? (
+              isVideo ? (
+                <video
+                  src={mediaSrc}
+                  controls
+                  autoPlay
+                  style={{ maxWidth: "100%", maxHeight: "100%" }}
+                />
+              ) : (
+                <img
+                  src={mediaSrc}
+                  alt=""
+                  style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                />
+              )
+            ) : null}
+          </Box>
+          <Box width={400} maxWidth="42%" borderLeft="1px solid #2a2a2a">
+            {list}
+          </Box>
         </Box>
       </Dialog>
     );
   }
 
-  // Mobile: bottom sheet
   return (
     <Drawer
       anchor="bottom"
       open={open}
       onClose={onClose}
-      transitionDuration={280}
       PaperProps={{
         sx: {
-          height: "75vh",
-          borderTopLeftRadius: 14,
-          borderTopRightRadius: 14,
-          animation: open ? `${slideUp} 0.28s ease-out` : undefined,
+          height: "78vh",
+          borderTopLeftRadius: 16,
+          borderTopRightRadius: 16,
+          bgcolor: panelBg,
         },
       }}
     >
@@ -472,20 +368,14 @@ function CommentsDrawer({ open, onClose, postId, postMedia, isVideo }) {
         sx={{
           width: 40,
           height: 4,
-          bgcolor: "#dbdbdb",
+          bgcolor: "#444",
           borderRadius: 2,
           mx: "auto",
           mt: 1,
+          mb: 0.5,
         }}
       />
-      <CommentsBody
-        postId={postId}
-        comments={comments}
-        setComments={setComments}
-        loading={loading}
-        onClose={onClose}
-        showClose
-      />
+      {list}
     </Drawer>
   );
 }
