@@ -1,291 +1,93 @@
 import express from "express";
 import { protect } from "../middleware/auth.js";
 import { supabase } from "../config/supabase.js";
-import upload from "../middleware/upload.js";
 
 const router = express.Router();
 
-function mediaPath(file) {
-  if (!file) return "";
-  return `/uploads/${file.filename}`;
+// onlineUsers + io injected from index.js
+let io = null;
+let onlineUsers = null;
+
+export function setPostsRealtime(ioInstance, onlineMap) {
+  io = ioInstance;
+  onlineUsers = onlineMap;
 }
 
-function mapPost(row, extra = {}) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    _id: row.id,
-    caption: row.caption || "",
-    media_url: row.media_url || "",
-    mediaUrl: row.media_url || "",
-    media_type: row.media_type || "image",
-    is_reel: !!row.is_reel,
-    location: row.location || "",
-    likes_count: row.likes_count || 0,
-    comments_count: row.comments_count || 0,
-    created_at: row.created_at,
-    createdAt: row.created_at,
-    user: row.users
-      ? {
-          id: row.users.id,
-          _id: row.users.id,
-          username: row.users.username,
-          avatar: row.users.avatar || "",
-          fullName: row.users.full_name || "",
-        }
-      : undefined,
-    ...extra,
-  };
+function notifyUser(userId, payload) {
+  if (!io || !onlineUsers || !userId) return;
+  const sid = onlineUsers.get(String(userId));
+  if (sid) io.to(sid).emit("notify", payload);
 }
 
-// ---------- CREATE POST / REEL ----------
-router.post("/", protect, upload.single("media"), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const caption = req.body.caption || "";
-    const location = req.body.location || "";
-    const isReel =
-      req.body.is_reel === "true" ||
-      req.body.isReel === "true" ||
-      req.body.type === "reel";
+async function getUserPublic(id) {
+  const { data } = await supabase
+    .from("users")
+    .select("id, username, full_name, avatar")
+    .eq("id", id)
+    .maybeSingle();
+  return data;
+}
 
-    let media_url = req.body.media_url || "";
-    let media_type = req.body.media_type || "image";
-
-    if (req.file) {
-      media_url = mediaPath(req.file);
-      media_type = req.file.mimetype.startsWith("video") ? "video" : "image";
-    }
-
-    if (!media_url) {
-      return res.status(400).json({ message: "Media required" });
-    }
-
-    const { data, error } = await supabase
-      .from("posts")
-      .insert({
-        user_id: userId,
-        caption,
-        media_url,
-        media_type,
-        is_reel: isReel || media_type === "video",
-        location,
-      })
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
-      .single();
-
-    if (error) throw error;
-
-    await supabase
-      .from("users")
-      .update({ posts_count: (req.user.posts_count || 0) + 1 })
-      .eq("id", userId)
-      .catch(() => {});
-
-    res.status(201).json({ post: mapPost(data) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// ---------- FEED (following + recent fallback) ----------
+// ——— Feed / explore / reels (keep simple + fast) ———
 router.get("/feed", protect, async (req, res) => {
   try {
-    const userId = req.user.id;
-
-    const { data: follows } = await supabase
-      .from("follows")
-      .select("following_id")
-      .eq("follower_id", userId);
-
-    const followingIds = (follows || []).map((f) => f.following_id);
-    const authorIds = [...new Set([userId, ...followingIds])];
-
-    let query = supabase
+    const { data, error } = await supabase
       .from("posts")
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
+      .select("*, users:user_id(id, username, full_name, avatar)")
       .order("created_at", { ascending: false })
-      .limit(50);
-
-    // If following people, prefer their posts; still show global if few
-    if (followingIds.length > 0) {
-      query = query.in("user_id", authorIds);
-    }
-
-    const { data, error } = await query;
+      .limit(40);
     if (error) throw error;
-
-    let posts = data || [];
-
-    // Fallback: global recent if empty
-    if (posts.length === 0) {
-      const { data: globalPosts, error: gErr } = await supabase
-        .from("posts")
-        .select(
-          `
-          id, caption, media_url, media_type, is_reel, location,
-          likes_count, comments_count, created_at, user_id,
-          users:user_id ( id, username, avatar, full_name )
-        `
-        )
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (gErr) throw gErr;
-      posts = globalPosts || [];
-    }
-
-    const postIds = posts.map((p) => p.id);
-    let likedSet = new Set();
-    if (postIds.length) {
-      const { data: likes } = await supabase
-        .from("likes")
-        .select("post_id")
-        .eq("user_id", userId)
-        .in("post_id", postIds);
-      (likes || []).forEach((l) => likedSet.add(l.post_id));
-    }
-
-    res.json({
-      posts: posts.map((p) =>
-        mapPost(p, { liked: likedSet.has(p.id), isLiked: likedSet.has(p.id) })
-      ),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    res.json({ posts: data || [] });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- EXPLORE ----------
 router.get("/explore", protect, async (req, res) => {
   try {
-    const userId = req.user.id;
     const { data, error } = await supabase
       .from("posts")
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
+      .select("*, users:user_id(id, username, full_name, avatar)")
       .order("created_at", { ascending: false })
       .limit(60);
-
     if (error) throw error;
-
-    const postIds = (data || []).map((p) => p.id);
-    let likedSet = new Set();
-    if (postIds.length) {
-      const { data: likes } = await supabase
-        .from("likes")
-        .select("post_id")
-        .eq("user_id", userId)
-        .in("post_id", postIds);
-      (likes || []).forEach((l) => likedSet.add(l.post_id));
-    }
-
-    res.json({
-      posts: (data || []).map((p) =>
-        mapPost(p, { liked: likedSet.has(p.id), isLiked: likedSet.has(p.id) })
-      ),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    res.json({ posts: data || [] });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- REELS ----------
 router.get("/reels", protect, async (req, res) => {
   try {
-    const userId = req.user.id;
     const { data, error } = await supabase
       .from("posts")
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
+      .select("*, users:user_id(id, username, full_name, avatar)")
       .or("is_reel.eq.true,media_type.eq.video")
       .order("created_at", { ascending: false })
       .limit(40);
-
     if (error) throw error;
-
-    const postIds = (data || []).map((p) => p.id);
-    let likedSet = new Set();
-    if (postIds.length) {
-      const { data: likes } = await supabase
-        .from("likes")
-        .select("post_id")
-        .eq("user_id", userId)
-        .in("post_id", postIds);
-      (likes || []).forEach((l) => likedSet.add(l.post_id));
-    }
-
-    res.json({
-      posts: (data || []).map((p) =>
-        mapPost(p, { liked: likedSet.has(p.id), isLiked: likedSet.has(p.id) })
-      ),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    res.json({ posts: data || [] });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- SINGLE POST ----------
 router.get("/:id", protect, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("posts")
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
+      .select("*, users:user_id(id, username, full_name, avatar)")
       .eq("id", req.params.id)
-      .single();
-
-    if (error || !data) {
-      return res.status(404).json({ message: "Post not found" });
-    }
-
-    const { data: like } = await supabase
-      .from("likes")
-      .select("post_id")
-      .eq("post_id", data.id)
-      .eq("user_id", req.user.id)
       .maybeSingle();
-
-    res.json({
-      post: mapPost(data, { liked: !!like, isLiked: !!like }),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    if (error) throw error;
+    if (!data) return res.status(404).json({ message: "Post not found" });
+    res.json({ post: data });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- LIKE POST ----------
+// Like post → notify owner
 router.post("/:id/like", protect, async (req, res) => {
   try {
     const postId = req.params.id;
@@ -293,219 +95,197 @@ router.post("/:id/like", protect, async (req, res) => {
 
     const { data: existing } = await supabase
       .from("likes")
-      .select("post_id")
+      .select("*")
       .eq("post_id", postId)
       .eq("user_id", userId)
       .maybeSingle();
 
+    const { data: post } = await supabase
+      .from("posts")
+      .select("id, user_id, likes_count")
+      .eq("id", postId)
+      .maybeSingle();
+
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
     if (existing) {
       await supabase.from("likes").delete().eq("post_id", postId).eq("user_id", userId);
-      await supabase.rpc("decrement_likes_count", { p_id: postId }).catch(async () => {
-        const { data: p } = await supabase
-          .from("posts")
-          .select("likes_count")
-          .eq("id", postId)
-          .single();
-        await supabase
-          .from("posts")
-          .update({ likes_count: Math.max(0, (p?.likes_count || 1) - 1) })
-          .eq("id", postId);
-      });
+      await supabase
+        .from("posts")
+        .update({ likes_count: Math.max(0, (post.likes_count || 1) - 1) })
+        .eq("id", postId);
       return res.json({ liked: false });
     }
 
     await supabase.from("likes").insert({ post_id: postId, user_id: userId });
-    await supabase.rpc("increment_likes_count", { p_id: postId }).catch(async () => {
-      const { data: p } = await supabase
-        .from("posts")
-        .select("likes_count")
-        .eq("id", postId)
-        .single();
-      await supabase
-        .from("posts")
-        .update({ likes_count: (p?.likes_count || 0) + 1 })
-        .eq("id", postId);
-    });
+    await supabase
+      .from("posts")
+      .update({ likes_count: (post.likes_count || 0) + 1 })
+      .eq("id", postId);
+
+    if (String(post.user_id) !== String(userId)) {
+      const me = await getUserPublic(userId);
+      notifyUser(post.user_id, {
+        type: "like",
+        fromName: me?.username || "Someone",
+        text: `liked your post`,
+        postId,
+      });
+    }
 
     res.json({ liked: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- USER POSTS ----------
-router.get("/user/:username", protect, async (req, res) => {
-  try {
-    const { data: u, error: uErr } = await supabase
-      .from("users")
-      .select("id, username")
-      .eq("username", req.params.username.toLowerCase())
-      .single();
-
-    if (uErr || !u) return res.status(404).json({ message: "User not found" });
-
-    const { data, error } = await supabase
-      .from("posts")
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
-      .eq("user_id", u.id)
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-
-    res.json({ posts: (data || []).map((p) => mapPost(p)) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// ---------- GET COMMENTS ----------
+// Get comments (top-level + replies)
 router.get("/:id/comments", protect, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user.id;
 
-    const { data: rows, error } = await supabase
+    const { data, error } = await supabase
       .from("comments")
-      .select(
-        `
-        id, text, parent_id, created_at, user_id,
-        users:user_id ( id, username, avatar )
-      `
-      )
+      .select("*, users:user_id(id, username, full_name, avatar)")
       .eq("post_id", postId)
       .order("created_at", { ascending: true });
 
     if (error) throw error;
 
-    const ids = (rows || []).map((r) => r.id);
+    const rows = data || [];
+    // likes for current user
+    const ids = rows.map((r) => r.id);
     let likedSet = new Set();
-    let likeCounts = {};
-
     if (ids.length) {
-      const { data: likes } = await supabase
+      const { data: cl } = await supabase
         .from("comment_likes")
-        .select("comment_id, user_id")
+        .select("comment_id")
+        .eq("user_id", userId)
         .in("comment_id", ids);
-
-      (likes || []).forEach((l) => {
-        likeCounts[l.comment_id] = (likeCounts[l.comment_id] || 0) + 1;
-        if (l.user_id === userId) likedSet.add(l.comment_id);
-      });
+      (cl || []).forEach((x) => likedSet.add(x.comment_id));
     }
 
-    const byId = {};
-    const roots = [];
+    const mapped = rows.map((r) => ({
+      id: r.id,
+      text: r.text,
+      created_at: r.created_at,
+      parent_id: r.parent_id,
+      likes_count: r.likes_count || 0,
+      liked_by_me: likedSet.has(r.id),
+      user: r.users
+        ? {
+            id: r.users.id,
+            username: r.users.username,
+            fullName: r.users.full_name,
+            avatar: r.users.avatar,
+          }
+        : null,
+    }));
 
-    (rows || []).forEach((r) => {
-      const item = {
-        id: r.id,
-        text: r.text,
-        parent_id: r.parent_id,
-        created_at: r.created_at,
-        user: r.users || { username: "user", avatar: "" },
-        liked: likedSet.has(r.id),
-        isLiked: likedSet.has(r.id),
-        likes_count: likeCounts[r.id] || 0,
-        replies: [],
-      };
-      byId[r.id] = item;
-    });
+    const tops = mapped.filter((c) => !c.parent_id);
+    const replies = mapped.filter((c) => c.parent_id);
+    const tree = tops.map((t) => ({
+      ...t,
+      replies: replies.filter((r) => String(r.parent_id) === String(t.id)),
+    }));
 
-    Object.values(byId).forEach((item) => {
-      if (item.parent_id && byId[item.parent_id]) {
-        byId[item.parent_id].replies.push(item);
-      } else if (!item.parent_id) {
-        roots.push(item);
-      } else {
-        roots.push(item);
-      }
-    });
-
-    res.json({ comments: roots });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    res.json({ comments: tree });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- CREATE COMMENT ----------
+// Create comment / reply → notify
 router.post("/:id/comments", protect, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user.id;
-    const { text, parentId } = req.body;
+    const text = (req.body?.text || "").trim();
+    const parentId = req.body?.parentId || null;
 
-    if (!text || !String(text).trim()) {
-      return res.status(400).json({ message: "Comment text required" });
-    }
+    if (!text) return res.status(400).json({ message: "Text required" });
 
-    const { data, error } = await supabase
+    const { data: post } = await supabase
+      .from("posts")
+      .select("id, user_id")
+      .eq("id", postId)
+      .maybeSingle();
+    if (!post) return res.status(404).json({ message: "Post not found" });
+
+    const insert = {
+      post_id: postId,
+      user_id: userId,
+      text,
+      likes_count: 0,
+    };
+    if (parentId) insert.parent_id = parentId;
+
+    const { data: created, error } = await supabase
       .from("comments")
-      .insert({
-        post_id: postId,
-        user_id: userId,
-        text: String(text).trim(),
-        parent_id: parentId || null,
-      })
-      .select(
-        `
-        id, text, parent_id, created_at, user_id,
-        users:user_id ( id, username, avatar )
-      `
-      )
+      .insert(insert)
+      .select("*")
       .single();
-
     if (error) throw error;
 
-    const { data: p } = await supabase
-      .from("posts")
-      .select("comments_count")
-      .eq("id", postId)
-      .single();
+    await supabase.rpc("increment_comments", { post_id_input: postId }).catch(() =>
+      supabase
+        .from("posts")
+        .update({ comments_count: (post.comments_count || 0) + 1 })
+        .eq("id", postId)
+    );
 
-    await supabase
-      .from("posts")
-      .update({ comments_count: (p?.comments_count || 0) + 1 })
-      .eq("id", postId);
+    const me = await getUserPublic(userId);
 
-    res.status(201).json({
-      comment: {
-        id: data.id,
-        text: data.text,
-        parent_id: data.parent_id,
-        created_at: data.created_at,
-        user: data.users || {
-          username: req.user.username,
-          avatar: req.user.avatar,
-        },
-        liked: false,
-        likes_count: 0,
-        replies: [],
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+    // notify post owner
+    if (String(post.user_id) !== String(userId)) {
+      notifyUser(post.user_id, {
+        type: "comment",
+        fromName: me?.username || "Someone",
+        text: parentId ? "replied on your post" : `commented: ${text.slice(0, 80)}`,
+        postId,
+      });
+    }
+
+    // notify parent comment author
+    if (parentId) {
+      const { data: parent } = await supabase
+        .from("comments")
+        .select("user_id")
+        .eq("id", parentId)
+        .maybeSingle();
+      if (parent && String(parent.user_id) !== String(userId)) {
+        notifyUser(parent.user_id, {
+          type: "reply",
+          fromName: me?.username || "Someone",
+          text: `replied to your comment`,
+          postId,
+        });
+      }
+    }
+
+    res.status(201).json({ comment: created });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
 
-// ---------- LIKE COMMENT ----------
+// Like comment → notify author
 router.post("/comments/:commentId/like", protect, async (req, res) => {
   try {
     const commentId = req.params.commentId;
     const userId = req.user.id;
 
+    const { data: comment } = await supabase
+      .from("comments")
+      .select("id, user_id, likes_count, post_id")
+      .eq("id", commentId)
+      .maybeSingle();
+    if (!comment) return res.status(404).json({ message: "Comment not found" });
+
     const { data: existing } = await supabase
       .from("comment_likes")
-      .select("comment_id")
+      .select("*")
       .eq("comment_id", commentId)
       .eq("user_id", userId)
       .maybeSingle();
@@ -516,6 +296,10 @@ router.post("/comments/:commentId/like", protect, async (req, res) => {
         .delete()
         .eq("comment_id", commentId)
         .eq("user_id", userId);
+      await supabase
+        .from("comments")
+        .update({ likes_count: Math.max(0, (comment.likes_count || 1) - 1) })
+        .eq("id", commentId);
       return res.json({ liked: false });
     }
 
@@ -523,91 +307,25 @@ router.post("/comments/:commentId/like", protect, async (req, res) => {
       comment_id: commentId,
       user_id: userId,
     });
+    await supabase
+      .from("comments")
+      .update({ likes_count: (comment.likes_count || 0) + 1 })
+      .eq("id", commentId);
+
+    if (String(comment.user_id) !== String(userId)) {
+      const me = await getUserPublic(userId);
+      notifyUser(comment.user_id, {
+        type: "comment_like",
+        fromName: me?.username || "Someone",
+        text: "liked your comment",
+        postId: comment.post_id,
+      });
+    }
 
     res.json({ liked: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 });
-
-// ---------- CREATE POST ----------
-router.post("/", protect, upload.single("media"), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const caption = req.body.caption || "";
-    const location = req.body.location || "";
-    const isReel =
-      req.body.is_reel === "true" ||
-      req.body.isReel === "true" ||
-      req.body.type === "reel";
-
-    let media_url = req.body.media_url || "";
-    let media_type = req.body.media_type || "image";
-
-    if (req.file) {
-      media_url = `/uploads/${req.file.filename}`;
-      media_type = req.file.mimetype.startsWith("video") ? "video" : "image";
-    }
-
-    if (!media_url) {
-      return res.status(400).json({ message: "Media required" });
-    }
-
-    const { data, error } = await supabase
-      .from("posts")
-      .insert({
-        user_id: userId,
-        caption,
-        media_url,
-        media_type,
-        is_reel: isReel || media_type === "video",
-        location,
-      })
-      .select(
-        `
-        id, caption, media_url, media_type, is_reel, location,
-        likes_count, comments_count, created_at, user_id,
-        users:user_id ( id, username, avatar, full_name )
-      `
-      )
-      .single();
-
-    if (error) throw error;
-
-    res.status(201).json({ post: mapPost(data) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-function mapPost(row, extra = {}) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    _id: row.id,
-    caption: row.caption || "",
-    media_url: row.media_url || "",
-    mediaUrl: row.media_url || "",
-    media_type: row.media_type || "image",
-    is_reel: !!row.is_reel,
-    location: row.location || "",
-    likes_count: row.likes_count || 0,
-    comments_count: row.comments_count || 0,
-    created_at: row.created_at,
-    createdAt: row.created_at,
-    user: row.users
-      ? {
-          id: row.users.id,
-          _id: row.users.id,
-          username: row.users.username,
-          avatar: row.users.avatar || "",
-          fullName: row.users.full_name || "",
-        }
-      : undefined,
-    ...extra,
-  };
-}
 
 export default router;

@@ -1,8 +1,20 @@
 import { io } from "socket.io-client";
 import { API_URL } from "./api";
-import { showLocalNotification } from "../index";
 
 let socket = null;
+
+function showLocalNotification(title, body, data = {}) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+  try {
+    new Notification(title, {
+      body,
+      icon: "/logo192.png",
+      badge: "/logo192.png",
+      data,
+    });
+  } catch (e) {}
+}
 
 export function getSocket() {
   return socket;
@@ -36,7 +48,7 @@ export function connectSocket(userId) {
   });
 
   socket.on("connect", () => {
-    console.log("Socket connected", API_URL, socket.id);
+    console.log("Socket connected to API:", API_URL, socket.id);
     socket.emit("user:online", String(userId));
   });
 
@@ -45,14 +57,19 @@ export function connectSocket(userId) {
   });
 
   socket.on("connect_error", (err) => {
-    console.log("Socket error:", err?.message || err);
+    console.log("Socket connect_error:", err?.message || err);
   });
 
-  // Incoming call → system notification
+  socket.on("disconnect", (reason) => {
+    console.log("Socket disconnect:", reason);
+  });
+
   socket.on("call:incoming", (payload) => {
-    showLocalNotification("Incoming call", payload?.fromName || "Someone is calling", {
-      type: "call",
-    });
+    showLocalNotification(
+      "Incoming call",
+      payload?.fromName || "Someone is calling you",
+      { type: "call" }
+    );
   });
 
   socket.on("message:new", (payload) => {
@@ -60,6 +77,14 @@ export function connectSocket(userId) {
       payload?.fromName || "New message",
       payload?.text || "Open Gacuriro Fam",
       { type: "message" }
+    );
+  });
+
+  socket.on("notify", (p) => {
+    showLocalNotification(
+      p?.fromName || "Gacuriro Fam",
+      p?.text || "New activity",
+      { type: p?.type || "notify", postId: p?.postId }
     );
   });
 
@@ -75,4 +100,8 @@ export function disconnectSocket() {
   socket = null;
 }
 
-export default { getSocket, connectSocket, disconnectSocket };
+export default {
+  getSocket,
+  connectSocket,
+  disconnectSocket,
+};

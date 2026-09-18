@@ -1,335 +1,212 @@
-import React, { useRef, useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   Box,
-  Typography,
-  Avatar,
-  IconButton,
   Card,
   CardHeader,
   CardContent,
+  CardActions,
+  Avatar,
+  IconButton,
+  Typography,
+  Button,
   Menu,
   MenuItem,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  List,
-  ListItem,
-  ListItemAvatar,
-  ListItemText,
-  TextField,
-  Button,
-  CircularProgress,
-  Fade,
 } from "@mui/material";
 import {
   FavoriteBorder,
   Favorite,
   ChatBubbleOutline,
   Send,
+  BookmarkBorder,
+  Bookmark,
   MoreHoriz,
+  VolumeOff,
+  VolumeUp,
+  Repeat,
 } from "@mui/icons-material";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { API_URL } from "../config";
-import { mediaUrl } from "../utils/api";
+import { API_URL, mediaUrl } from "../utils/api";
+import CommentsDrawer from "./CommentsDrawer";
 
-function PostCard({ post }) {
+function PostCard({ post, onUpdated }) {
   const { token, user } = useAuth();
-  const navigate = useNavigate();
-  const lastTap = useRef(0);
-
-  const [liked, setLiked] = useState(Boolean(post?.liked));
-  const [likes, setLikes] = useState(post?.likesCount ?? post?.likes_count ?? 0);
-  const [showHeart, setShowHeart] = useState(false);
-  const [menuEl, setMenuEl] = useState(null);
+  const [liked, setLiked] = useState(!!post.liked_by_me || !!post.liked);
+  const [likes, setLikes] = useState(post.likes_count || post.likesCount || 0);
+  const [saved, setSaved] = useState(!!post.saved);
+  const [muted, setMuted] = useState(() => {
+    const v = localStorage.getItem("gf_reels_muted");
+    return v === null ? true : v === "1";
+  });
   const [commentsOpen, setCommentsOpen] = useState(false);
-  const [comments, setComments] = useState([]);
-  const [commentText, setCommentText] = useState("");
-  const [shareOpen, setShareOpen] = useState(false);
-  const [following, setFollowing] = useState([]);
-  const [shareLoading, setShareLoading] = useState(false);
-  const [imgError, setImgError] = useState(false);
+  const [heart, setHeart] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const [following, setFollowing] = useState(!!post.following_author);
+  const videoRef = useRef(null);
 
-  const author = post?.user || {};
-  const username = author.username || "user";
-  const postId = post?.id || post?._id;
-
-  const raw =
-    post?.mediaUrl ||
-    post?.media_url ||
-    post?.media?.[0]?.url ||
-    post?.image ||
-    "";
-  const src = mediaUrl(raw);
-
+  const author = post.users || post.user || post.author || {};
+  const username = author.username || post.username || "user";
+  const avatar = author.avatar ? mediaUrl(author.avatar) : undefined;
+  const media = post.media_url || post.mediaUrl || post.image || "";
   const isVideo =
-    post?.isReel ||
-    post?.is_reel ||
-    post?.mediaType === "video" ||
-    post?.media_type === "video" ||
-    /\.(mp4|webm|mov)(\?|$)/i.test(raw || "");
+    post.media_type === "video" ||
+    post.is_reel ||
+    /\.(mp4|webm|mov)$/i.test(media || "");
+  const postId = post.id || post._id;
+  const caption = post.caption || post.text || "";
+
+  const toggleMute = (e) => {
+    e?.stopPropagation?.();
+    const next = !muted;
+    setMuted(next);
+    localStorage.setItem("gf_reels_muted", next ? "1" : "0");
+    if (videoRef.current) videoRef.current.muted = next;
+  };
 
   const doLike = async () => {
-    if (!postId) return;
-    const next = !liked;
-    setLiked(next);
-    setLikes((n) => Math.max(0, n + (next ? 1 : -1)));
-
-    if (next) {
-      setShowHeart(true);
-      setTimeout(() => setShowHeart(false), 800);
+    const prevLiked = liked;
+    const prevLikes = likes;
+    setLiked(!prevLiked);
+    setLikes(prevLikes + (prevLiked ? -1 : 1));
+    if (!prevLiked) {
+      setHeart(true);
+      setTimeout(() => setHeart(false), 700);
     }
-
     try {
-      await fetch(`${API_URL}/api/posts/${postId}/like`, {
+      const res = await fetch(`${API_URL}/api/posts/${postId}/like`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-    } catch {
-      // rollback if failed
-      setLiked(!next);
-      setLikes((n) => Math.max(0, n + (next ? -1 : 1)));
-    }
-  };
-
-  const onMediaTap = () => {
-    const now = Date.now();
-    if (now - lastTap.current < 300) {
-      if (!liked) doLike();
-      else {
-        setShowHeart(true);
-        setTimeout(() => setShowHeart(false), 800);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && typeof data.liked === "boolean") {
+        setLiked(data.liked);
       }
+      onUpdated && onUpdated();
+    } catch (e) {
+      setLiked(prevLiked);
+      setLikes(prevLikes);
     }
-    lastTap.current = now;
   };
 
-  const openComments = async () => {
-    setCommentsOpen(true);
-    if (!postId) return;
+  const onDoubleTap = () => {
+    if (!liked) doLike();
+    else {
+      setHeart(true);
+      setTimeout(() => setHeart(false), 700);
+    }
+  };
+
+  const followAuthor = async () => {
     try {
-      const res = await fetch(`${API_URL}/api/posts/${postId}`, {
+      const res = await fetch(`${API_URL}/api/users/${author.id || username}/follow`, {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json().catch(() => ({}));
-      setComments(data.comments || []);
-    } catch {
-      setComments([]);
-    }
-  };
-
-  const sendComment = async () => {
-    if (!commentText.trim() || !postId) return;
-    try {
-      const res = await fetch(`${API_URL}/api/posts/${postId}/comments`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ text: commentText.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setComments((prev) => [
-          ...prev,
-          data.comment || {
-            id: Date.now().toString(),
-            text: commentText.trim(),
-            user: { username: user?.username, avatar: user?.avatar },
-          },
-        ]);
-        setCommentText("");
-      }
+      if (res.ok) setFollowing(true);
     } catch (e) {
       console.error(e);
     }
   };
 
-  const openShare = async () => {
-    setShareOpen(true);
-    setShareLoading(true);
-    try {
-      const res = await fetch(
-        `${API_URL}/api/users/${encodeURIComponent(user.username)}/following`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      const data = await res.json().catch(() => ({}));
-      setFollowing(data.users || []);
-    } catch {
-      setFollowing([]);
-    } finally {
-      setShareLoading(false);
-    }
-  };
-
-  const sendToUser = async (target) => {
-    try {
-      const res = await fetch(`${API_URL}/api/messages/conversations`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ userId: target.id || target._id }),
-      });
-      const data = await res.json().catch(() => ({}));
-      const cid = data.conversation?.id || data.conversation?._id;
-      if (cid) {
-        await fetch(`${API_URL}/api/messages`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            conversationId: cid,
-            text: `Shared a post: ${window.location.origin}/post/${postId}`,
-          }),
-        });
-        setShareOpen(false);
-        navigate(`/messages/${cid}`);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const copyLink = () => {
-    const url = `${window.location.origin}/post/${postId}`;
-    navigator.clipboard?.writeText(url);
-    setMenuEl(null);
-  };
+  const isMe =
+    String(author.id || author._id) === String(user?.id || user?._id) ||
+    username === user?.username;
 
   return (
     <Card
       elevation={0}
       sx={{
-        bgcolor: "#000",
-        color: "#fff",
-        borderRadius: 0,
-        borderBottom: "1px solid #222",
-        maxWidth: 480,
+        maxWidth: 540,
         mx: "auto",
+        mb: 2.5,
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 2,
+        overflow: "hidden",
+        bgcolor: "#fff",
       }}
     >
       <CardHeader
         avatar={
-          <Avatar
-            src={mediaUrl(author.avatar)}
-            component={Link}
-            to={`/${username}`}
-            sx={{ width: 36, height: 36, bgcolor: "#333" }}
-          >
+          <Avatar component={Link} to={`/${username}`} src={avatar}>
             {username[0]?.toUpperCase()}
           </Avatar>
         }
         title={
-          <Typography
-            component={Link}
-            to={`/${username}`}
-            fontWeight={700}
-            fontSize={14}
-            sx={{ color: "#fff", textDecoration: "none" }}
-          >
-            {username}
-          </Typography>
+          <Box display="flex" alignItems="center" gap={1}>
+            <Typography
+              component={Link}
+              to={`/${username}`}
+              fontWeight={700}
+              fontSize={14}
+              sx={{ textDecoration: "none", color: "inherit" }}
+            >
+              {username}
+            </Typography>
+            {!isMe && !following && (
+              <Button
+                size="small"
+                onClick={followAuthor}
+                sx={{ textTransform: "none", fontWeight: 700, minWidth: 0, p: 0 }}
+              >
+                Follow
+              </Button>
+            )}
+          </Box>
         }
+        subheader={post.location || null}
         action={
-          <>
-            <IconButton
-              sx={{ color: "#fff" }}
-              onClick={(e) => setMenuEl(e.currentTarget)}
-            >
-              <MoreHoriz />
-            </IconButton>
-            <Menu
-              anchorEl={menuEl}
-              open={Boolean(menuEl)}
-              onClose={() => setMenuEl(null)}
-            >
-              <MenuItem
-                onClick={() => {
-                  setMenuEl(null);
-                  navigate(`/post/${postId}`);
-                }}
-              >
-                Go to post
-              </MenuItem>
-              <MenuItem onClick={copyLink}>Copy link</MenuItem>
-              <MenuItem
-                onClick={() => {
-                  setMenuEl(null);
-                  openShare();
-                }}
-              >
-                Share to…
-              </MenuItem>
-              <MenuItem
-                onClick={() => {
-                  setMenuEl(null);
-                  navigate(`/${username}`);
-                }}
-              >
-                About this account
-              </MenuItem>
-            </Menu>
-          </>
+          <IconButton onClick={(e) => setAnchor(e.currentTarget)}>
+            <MoreHoriz />
+          </IconButton>
         }
-        sx={{ py: 1, px: 1.5 }}
+        sx={{ py: 1, "& .MuiCardHeader-title": { fontSize: 14 } }}
       />
 
-      {/* Media */}
       <Box
-        onClick={onMediaTap}
-        sx={{
-          position: "relative",
-          width: "100%",
-          bgcolor: "#111",
-          minHeight: 280,
-          maxHeight: 560,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          overflow: "hidden",
-        }}
+        onDoubleClick={onDoubleTap}
+        sx={{ position: "relative", bgcolor: "#000", lineHeight: 0 }}
       >
-        {!src || imgError ? (
-          <Typography color="#555" fontSize={13}>
-            Media unavailable
-          </Typography>
-        ) : isVideo ? (
-          <video
-            src={src}
-            muted
-            autoPlay
-            loop
-            playsInline
-            preload="auto"
-            style={{
-              width: "100%",
-              maxHeight: 560,
-              objectFit: "contain",
-              display: "block",
-              background: "#000",
-            }}
-          />
+        {isVideo ? (
+          <>
+            <video
+              ref={videoRef}
+              src={mediaUrl(media)}
+              muted={muted}
+              playsInline
+              loop
+              controls={false}
+              onClick={(e) => {
+                const v = e.currentTarget;
+                if (v.paused) v.play().catch(() => {});
+                else v.pause();
+              }}
+              style={{ width: "100%", maxHeight: 620, objectFit: "contain" }}
+            />
+            <IconButton
+              onClick={toggleMute}
+              sx={{
+                position: "absolute",
+                right: 8,
+                bottom: 8,
+                bgcolor: "rgba(0,0,0,0.55)",
+                color: "#fff",
+                "&:hover": { bgcolor: "rgba(0,0,0,0.7)" },
+              }}
+              size="small"
+            >
+              {muted ? <VolumeOff fontSize="small" /> : <VolumeUp fontSize="small" />}
+            </IconButton>
+          </>
         ) : (
           <img
-            src={src}
+            src={mediaUrl(media)}
             alt=""
-            onError={() => setImgError(true)}
-            style={{
-              width: "100%",
-              maxHeight: 560,
-              objectFit: "contain",
-              display: "block",
-            }}
+            style={{ width: "100%", maxHeight: 620, objectFit: "cover", display: "block" }}
           />
         )}
 
-        {/* Double-tap heart animation */}
-        <Fade in={showHeart}>
+        {heart && (
           <Box
             sx={{
               position: "absolute",
@@ -338,127 +215,88 @@ function PostCard({ post }) {
               alignItems: "center",
               justifyContent: "center",
               pointerEvents: "none",
+              animation: "heartPop 0.7s ease",
+              "@keyframes heartPop": {
+                "0%": { transform: "scale(0.4)", opacity: 0 },
+                "40%": { transform: "scale(1.15)", opacity: 1 },
+                "100%": { transform: "scale(1)", opacity: 0 },
+              },
             }}
           >
-            <Favorite sx={{ fontSize: 90, color: "#fff", filter: "drop-shadow(0 0 8px rgba(0,0,0,0.5))" }} />
+            <Favorite sx={{ fontSize: 90, color: "#fff" }} />
           </Box>
-        </Fade>
+        )}
       </Box>
 
-      {/* Actions */}
-      <Box display="flex" alignItems="center" px={0.5} pt={0.5}>
-        <IconButton onClick={doLike} sx={{ color: liked ? "#ff2d8a" : "#fff" }}>
-          {liked ? <Favorite /> : <FavoriteBorder />}
+      <CardActions disableSpacing sx={{ px: 0.5, pt: 0.5 }}>
+        <IconButton onClick={doLike} sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
+          {liked ? <Favorite sx={{ color: "#ed4956" }} /> : <FavoriteBorder />}
         </IconButton>
-        <IconButton onClick={openComments} sx={{ color: "#fff" }}>
+        <IconButton
+          onClick={() => setCommentsOpen(true)}
+          sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}
+        >
           <ChatBubbleOutline />
         </IconButton>
-        <IconButton onClick={openShare} sx={{ color: "#fff" }}>
+        <IconButton sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
           <Send />
         </IconButton>
-      </Box>
+        <IconButton sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
+          <Repeat />
+        </IconButton>
+        <Box flex={1} />
+        <IconButton onClick={() => setSaved((s) => !s)}>
+          {saved ? <Bookmark /> : <BookmarkBorder />}
+        </IconButton>
+      </CardActions>
 
-      <CardContent sx={{ pt: 0, pb: 1.5, px: 1.5 }}>
+      <CardContent sx={{ pt: 0, pb: "12px !important" }}>
         <Typography fontWeight={700} fontSize={14}>
-          {likes} likes
+          {likes.toLocaleString()} likes
         </Typography>
-        {post?.caption ? (
+        {caption && (
           <Typography fontSize={14} mt={0.5}>
-            <Box component="span" fontWeight={700} mr={0.75}>
+            <Box component={Link} to={`/${username}`} sx={{ fontWeight: 700, mr: 0.7, textDecoration: "none", color: "inherit" }}>
               {username}
             </Box>
-            {post.caption}
+            {caption}
           </Typography>
-        ) : null}
+        )}
         <Typography
           fontSize={13}
-          color="#888"
-          sx={{ cursor: "pointer", mt: 0.5 }}
-          onClick={openComments}
+          color="text.secondary"
+          mt={0.5}
+          sx={{ cursor: "pointer" }}
+          onClick={() => setCommentsOpen(true)}
         >
-          View comments
+          View all comments
         </Typography>
       </CardContent>
 
-      {/* Comments Dialog */}
-      <Dialog
+      <Menu anchorEl={anchor} open={!!anchor} onClose={() => setAnchor(null)}>
+        <MenuItem component={Link} to={`/post/${postId}`} onClick={() => setAnchor(null)}>
+          Go to post
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            navigator.clipboard?.writeText(`${window.location.origin}/post/${postId}`);
+            setAnchor(null);
+          }}
+        >
+          Copy link
+        </MenuItem>
+        <MenuItem component={Link} to={`/${username}`} onClick={() => setAnchor(null)}>
+          About this account
+        </MenuItem>
+      </Menu>
+
+      <CommentsDrawer
         open={commentsOpen}
         onClose={() => setCommentsOpen(false)}
-        fullWidth
-        maxWidth="xs"
-      >
-        <DialogTitle>Comments</DialogTitle>
-        <DialogContent>
-          {comments.length === 0 ? (
-            <Typography color="text.secondary" fontSize={14}>
-              No comments yet
-            </Typography>
-          ) : (
-            comments.map((c) => (
-              <Box key={c.id || c._id} display="flex" gap={1} mb={1.5}>
-                <Avatar
-                  src={mediaUrl(c.user?.avatar)}
-                  sx={{ width: 32, height: 32 }}
-                >
-                  {(c.user?.username || "U")[0]}
-                </Avatar>
-                <Typography fontSize={14}>
-                  <b>{c.user?.username || "user"}</b> {c.text}
-                </Typography>
-              </Box>
-            ))
-          )}
-          <Box display="flex" gap={1} mt={2}>
-            <TextField
-              fullWidth
-              size="small"
-              placeholder="Add a comment..."
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendComment()}
-            />
-            <Button onClick={sendComment}>Post</Button>
-          </Box>
-        </DialogContent>
-      </Dialog>
-
-      {/* Share Dialog */}
-      <Dialog
-        open={shareOpen}
-        onClose={() => setShareOpen(false)}
-        fullWidth
-        maxWidth="xs"
-      >
-        <DialogTitle>Send to</DialogTitle>
-        <DialogContent>
-          {shareLoading ? (
-            <Box display="flex" justifyContent="center" py={3}>
-              <CircularProgress size={28} />
-            </Box>
-          ) : following.length === 0 ? (
-            <Typography color="text.secondary">
-              Follow people to send posts to them
-            </Typography>
-          ) : (
-            <List>
-              {following.map((u) => (
-                <ListItem
-                  key={u.id || u._id}
-                  button
-                  onClick={() => sendToUser(u)}
-                >
-                  <ListItemAvatar>
-                    <Avatar src={mediaUrl(u.avatar)}>
-                      {(u.username || "U")[0]}
-                    </Avatar>
-                  </ListItemAvatar>
-                  <ListItemText primary={u.username} />
-                </ListItem>
-              ))}
-            </List>
-          )}
-        </DialogContent>
-      </Dialog>
+        postId={postId}
+        postMedia={media}
+        isVideo={isVideo}
+      />
     </Card>
   );
 }
