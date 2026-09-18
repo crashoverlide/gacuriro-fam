@@ -1,12 +1,19 @@
 const API_URL =
   process.env.REACT_APP_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname === "localhost"
+  (typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1")
     ? "http://localhost:5000"
     : "https://gacuriro-api.onrender.com");
 
 export function mediaUrl(path) {
   if (!path) return "";
-  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("blob:")) {
+  if (
+    path.startsWith("http://") ||
+    path.startsWith("https://") ||
+    path.startsWith("blob:") ||
+    path.startsWith("data:")
+  ) {
     return path;
   }
   const base = API_URL.replace(/\/$/, "");
@@ -16,25 +23,18 @@ export function mediaUrl(path) {
 
 export async function api(path, options = {}) {
   const token = localStorage.getItem("token");
-  const headers = {
-    ...(options.headers || {}),
-  };
+  const headers = { ...(options.headers || {}) };
 
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";
   }
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
+  const url = path.startsWith("http")
+    ? path
+    : `${API_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
-  const url = path.startsWith("http") ? path : `${API_URL}${path.startsWith("/") ? path : `/${path}`}`;
-
-  const res = await fetch(url, {
-    ...options,
-    headers,
-  });
-
+  const res = await fetch(url, { ...options, headers });
   return res;
 }
 

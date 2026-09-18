@@ -1,124 +1,140 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import {
   Box,
   Typography,
-  Avatar,
   IconButton,
-  Button,
-  Stack,
+  Avatar,
+  CircularProgress,
 } from "@mui/material";
 import {
   CallEnd,
+  Call,
   Mic,
   MicOff,
   Videocam,
   VideocamOff,
-  Call,
+  VolumeUp,
 } from "@mui/icons-material";
-import { getSocket, connectSocket } from "../utils/socket";
-import { useAuth } from "../context/AuthContext";
-import { API_URL } from "../config";
+import { getSocket } from "../utils/socket";
+import { mediaUrl } from "../utils/api";
 
-const ICE_SERVERS = {
+const ICE = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
   ],
 };
 
-function mediaSrc(url) {
-  if (!url) return "";
-  if (url.startsWith("http") || url.startsWith("blob:")) return url;
-  return `${API_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+// Simple generated ringtone (no external file needed)
+function createRingtone() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return { start: () => {}, stop: () => {} };
+
+  let ctx = null;
+  let timer = null;
+  let stopped = true;
+
+  const beep = () => {
+    if (stopped || !ctx) return;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    g.gain.value = 0.08;
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    o.stop(ctx.currentTime + 0.35);
+  };
+
+  return {
+    start() {
+      stopped = false;
+      ctx = new AudioCtx();
+      beep();
+      timer = setInterval(beep, 1200);
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+      try {
+        ctx?.close();
+      } catch (e) {}
+      ctx = null;
+    },
+  };
 }
 
-/**
- * Props:
- * - open: boolean
- * - mode: "voice" | "video"
- * - targetUser: { id, _id, username, avatar, fullName }
- * - isCaller: boolean (you started the call)
- * - incomingPayload: object from socket (when receiving)
- * - onClose: () => void
- */
-export default function VoiceCall({
+function VoiceCall({
   open,
-  mode = "voice",
-  targetUser,
-  isCaller = false,
-  incomingPayload = null,
   onClose,
+  mode = "audio", // "audio" | "video"
+  isCaller = false,
+  targetUserId,
+  targetName = "User",
+  targetAvatar = "",
+  meId,
+  incomingPayload = null,
 }) {
-  const { user } = useAuth();
+  const [status, setStatus] = useState(isCaller ? "calling" : "incoming");
+  const [muted, setMuted] = useState(false);
+  const [camOff, setCamOff] = useState(false);
+  const [error, setError] = useState("");
+
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const remoteSocketIdRef = useRef(null);
-  const ringAudioRef = useRef(null);
+  const ringtoneRef = useRef(null);
+  const politeRef = useRef(!isCaller);
 
-  const [status, setStatus] = useState("idle"); // idle | ringing | connecting | connected | ended
-  const [muted, setMuted] = useState(false);
-  const [camOff, setCamOff] = useState(false);
-  const [error, setError] = useState("");
-
-  const myId = String(user?._id || user?.id || "");
-  const targetId = String(
-    targetUser?._id || targetUser?.id || incomingPayload?.fromUserId || ""
-  );
-  const isVideo = mode === "video" || incomingPayload?.mode === "video";
+  const stopRingtone = () => {
+    try {
+      ringtoneRef.current?.stop();
+    } catch (e) {}
+    ringtoneRef.current = null;
+  };
 
   const cleanup = useCallback(() => {
-    try {
-      if (ringAudioRef.current) {
-        ringAudioRef.current.pause();
-        ringAudioRef.current.currentTime = 0;
-      }
-    } catch (_) {}
-
+    stopRingtone();
     try {
       localStreamRef.current?.getTracks()?.forEach((t) => t.stop());
-    } catch (_) {}
+    } catch (e) {}
     localStreamRef.current = null;
-
     try {
       pcRef.current?.close();
-    } catch (_) {}
+    } catch (e) {}
     pcRef.current = null;
-    remoteSocketIdRef.current = null;
   }, []);
 
-  const stopRing = () => {
-    try {
-      if (ringAudioRef.current) {
-        ringAudioRef.current.pause();
-        ringAudioRef.current.currentTime = 0;
+  const endCall = useCallback(
+    (notify = true) => {
+      const sock = getSocket();
+      if (notify && sock && targetUserId) {
+        sock.emit("call:end", { to: String(targetUserId) });
       }
-    } catch (_) {}
-  };
+      cleanup();
+      setStatus("ended");
+      onClose && onClose();
+    },
+    [cleanup, onClose, targetUserId]
+  );
 
-  const playRing = () => {
-    try {
-      if (!ringAudioRef.current) {
-        // simple oscillator ring via Web Audio if no file
-        return;
-      }
-      ringAudioRef.current.loop = true;
-      ringAudioRef.current.play().catch(() => {});
-    } catch (_) {}
-  };
+  const ensurePc = useCallback(() => {
+    if (pcRef.current) return pcRef.current;
 
-  const createPc = useCallback(() => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const pc = new RTCPeerConnection(ICE);
+    pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
       if (!e.candidate) return;
       const sock = getSocket();
-      const to = remoteSocketIdRef.current;
-      if (sock && to) {
-        sock.emit("call:ice", {
-          toSocketId: to,
+      if (sock && targetUserId) {
+        sock.emit("call:signal", {
+          to: String(targetUserId),
           candidate: e.candidate,
         });
       }
@@ -136,398 +152,309 @@ export default function VoiceCall({
         remoteVideoRef.current.play().catch(() => {});
       }
       setStatus("connected");
-      stopRing();
+      stopRingtone();
     };
 
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
       if (s === "connected") {
         setStatus("connected");
-        stopRing();
+        stopRingtone();
       }
       if (s === "failed" || s === "disconnected" || s === "closed") {
-        setStatus("ended");
+        if (s === "failed") setError("Connection failed");
       }
     };
 
-    pcRef.current = pc;
     return pc;
-  }, []);
+  }, [targetUserId]);
 
-  const getMedia = async (video) => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: video
-        ? {
-            facingMode: "user",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          }
-        : false,
-    });
+  const getMedia = async () => {
+    const constraints =
+      mode === "video"
+        ? { audio: true, video: { facingMode: "user", width: { ideal: 640 } } }
+        : { audio: true, video: false };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
     localStreamRef.current = stream;
-    if (localVideoRef.current && video) {
+
+    if (localVideoRef.current && mode === "video") {
       localVideoRef.current.srcObject = stream;
       localVideoRef.current.muted = true;
-      localVideoRef.current.playsInline = true;
       localVideoRef.current.play().catch(() => {});
     }
     return stream;
   };
 
-  const startCall = useCallback(async () => {
+  const startAsCaller = async () => {
     try {
-      setError("");
-      setStatus("ringing");
-      playRing();
+      setStatus("calling");
+      ringtoneRef.current = createRingtone();
+      ringtoneRef.current.start();
 
-      const sock = connectSocket(myId);
-      if (!sock) {
-        setError("Socket not ready");
+      const stream = await getMedia();
+      const pc = ensurePc();
+      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const sock = getSocket();
+      if (!sock?.connected) {
+        setError("Not connected to server. Wait and try again.");
+        stopRingtone();
         return;
       }
-
-      const stream = await getMedia(isVideo);
-      const pc = createPc();
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
       sock.emit("call:invite", {
-        targetIds: [targetId],
-        fromUserId: myId,
-        fromUsername: user?.username,
-        fromAvatar: user?.avatar,
-        mode: isVideo ? "video" : "voice",
+        to: [String(targetUserId)],
+        mode,
+        fromName: "You",
+        sdp: offer,
       });
 
-      // wait for accept → then create offer (handled in socket listeners)
+      sock.emit("call:signal", {
+        to: String(targetUserId),
+        sdp: offer,
+      });
     } catch (e) {
       console.error(e);
-      setError(
-        e?.name === "NotAllowedError"
-          ? "Microphone/camera permission denied"
-          : e.message || "Could not start call"
-      );
-      setStatus("ended");
-      cleanup();
+      setError(e.message || "Mic/camera permission denied");
+      stopRingtone();
     }
-  }, [myId, targetId, isVideo, user, createPc, cleanup]);
+  };
 
-  const acceptCall = useCallback(async () => {
+  const acceptIncoming = async () => {
     try {
-      setError("");
+      stopRingtone();
       setStatus("connecting");
-      stopRing();
-
-      const sock = connectSocket(myId);
-      const fromSocketId = incomingPayload?.fromSocketId;
-      if (!sock || !fromSocketId) {
-        setError("Caller offline");
-        return;
-      }
-      remoteSocketIdRef.current = fromSocketId;
-
-      const stream = await getMedia(isVideo);
-      const pc = createPc();
+      const stream = await getMedia();
+      const pc = ensurePc();
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
-      sock.emit("call:accept", {
-        toSocketId: fromSocketId,
-        fromUserId: myId,
-      });
-    } catch (e) {
-      console.error(e);
-      setError(
-        e?.name === "NotAllowedError"
-          ? "Microphone/camera permission denied"
-          : e.message || "Accept failed"
-      );
-      setStatus("ended");
-      cleanup();
-    }
-  }, [myId, incomingPayload, isVideo, createPc, cleanup]);
-
-  const endCall = useCallback(() => {
-    const sock = getSocket();
-    const to = remoteSocketIdRef.current;
-    if (sock && to) {
-      sock.emit("call:end", { toSocketId: to });
-    }
-    cleanup();
-    setStatus("ended");
-    if (onClose) onClose();
-  }, [cleanup, onClose]);
-
-  // Socket signaling
-  useEffect(() => {
-    if (!open || !myId) return;
-
-    const sock = connectSocket(myId);
-    if (!sock) return;
-
-    const onAccepted = async (payload) => {
-      try {
-        remoteSocketIdRef.current = payload.fromSocketId;
-        setStatus("connecting");
-        stopRing();
-
-        let pc = pcRef.current;
-        if (!pc) {
-          const stream = localStreamRef.current || (await getMedia(isVideo));
-          pc = createPc();
-          stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-        }
-
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sock.emit("call:offer", {
-          toSocketId: payload.fromSocketId,
-          sdp: offer,
-        });
-      } catch (e) {
-        console.error(e);
-        setError("Failed to connect");
-      }
-    };
-
-    const onOffer = async (payload) => {
-      try {
-        remoteSocketIdRef.current = payload.fromSocketId;
-        let pc = pcRef.current;
-        if (!pc) {
-          const stream = localStreamRef.current || (await getMedia(isVideo));
-          pc = createPc();
-          stream.getTracks().forEach((t) => pc.addTrack(t, stream));
-        }
-        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+      const remoteSdp = incomingPayload?.sdp;
+      if (remoteSdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription(remoteSdp));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        sock.emit("call:answer", {
-          toSocketId: payload.fromSocketId,
+        const sock = getSocket();
+        sock?.emit("call:signal", {
+          to: String(targetUserId),
           sdp: answer,
         });
-        setStatus("connecting");
-      } catch (e) {
-        console.error(e);
-        setError("Offer failed");
       }
-    };
+      setStatus("connected");
+    } catch (e) {
+      console.error(e);
+      setError(e.message || "Could not answer");
+    }
+  };
 
-    const onAnswer = async (payload) => {
-      try {
-        const pc = pcRef.current;
-        if (!pc) return;
-        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-        setStatus("connected");
-        stopRing();
-      } catch (e) {
-        console.error(e);
+  useEffect(() => {
+    if (!open) return;
+
+    const sock = getSocket();
+    if (!sock) {
+      setError("Socket not ready");
+      return;
+    }
+
+    if (!isCaller) {
+      ringtoneRef.current = createRingtone();
+      ringtoneRef.current.start();
+    } else {
+      startAsCaller();
+    }
+
+    const onSignal = async (payload) => {
+      if (!payload) return;
+      if (String(payload.from) !== String(targetUserId) && payload.from) {
+        // still accept if we are in this call UI
       }
-    };
-
-    const onIce = async (payload) => {
       try {
-        const pc = pcRef.current;
-        if (!pc || !payload.candidate) return;
-        await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+        const pc = ensurePc();
+        if (payload.sdp) {
+          const desc = payload.sdp;
+          if (desc.type === "offer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(desc));
+            if (!localStreamRef.current) {
+              const stream = await getMedia();
+              stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+            }
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            sock.emit("call:signal", {
+              to: String(targetUserId || payload.from),
+              sdp: answer,
+            });
+            setStatus("connected");
+            stopRingtone();
+          } else if (desc.type === "answer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(desc));
+            setStatus("connected");
+            stopRingtone();
+          }
+        }
+        if (payload.candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
+          } catch (e) {}
+        }
       } catch (e) {
-        console.error(e);
+        console.error("signal error", e);
       }
     };
 
     const onEnd = () => {
       cleanup();
       setStatus("ended");
-      if (onClose) onClose();
+      onClose && onClose();
     };
 
-    const onError = (p) => {
-      setError(p?.message || "Call error");
-      setStatus("ended");
-      stopRing();
+    const onUnavailable = () => {
+      setError("User offline");
+      stopRingtone();
+      setStatus("failed");
     };
 
-    sock.on("call:accepted", onAccepted);
-    sock.on("call:offer", onOffer);
-    sock.on("call:answer", onAnswer);
-    sock.on("call:ice", onIce);
+    sock.on("call:signal", onSignal);
     sock.on("call:end", onEnd);
-    sock.on("call:error", onError);
+    sock.on("call:unavailable", onUnavailable);
 
     return () => {
-      sock.off("call:accepted", onAccepted);
-      sock.off("call:offer", onOffer);
-      sock.off("call:answer", onAnswer);
-      sock.off("call:ice", onIce);
+      sock.off("call:signal", onSignal);
       sock.off("call:end", onEnd);
-      sock.off("call:error", onError);
+      sock.off("call:unavailable", onUnavailable);
+      cleanup();
     };
-  }, [open, myId, isVideo, createPc, cleanup, onClose]);
-
-  // Auto start if caller
-  useEffect(() => {
-    if (!open) return;
-    if (isCaller && status === "idle") {
-      startCall();
-    } else if (!isCaller && status === "idle") {
-      setStatus("ringing");
-      playRing();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isCaller]);
-
-  useEffect(() => {
-    return () => cleanup();
-  }, [cleanup]);
-
-  const toggleMute = () => {
-    const stream = localStreamRef.current;
-    if (!stream) return;
-    stream.getAudioTracks().forEach((t) => {
-      t.enabled = muted;
-    });
-    setMuted((m) => !m);
-  };
-
-  const toggleCam = () => {
-    const stream = localStreamRef.current;
-    if (!stream) return;
-    stream.getVideoTracks().forEach((t) => {
-      t.enabled = camOff;
-    });
-    setCamOff((c) => !c);
-  };
+  }, [open, isCaller, targetUserId]);
 
   if (!open) return null;
 
-  const displayName =
-    targetUser?.username ||
-    incomingPayload?.fromUsername ||
-    "User";
+  const avatarSrc = targetAvatar
+    ? targetAvatar.startsWith("http")
+      ? targetAvatar
+      : mediaUrl(targetAvatar)
+    : undefined;
 
   return (
     <Box
       sx={{
         position: "fixed",
         inset: 0,
-        zIndex: 2000,
-        bgcolor: "#0a0a0a",
+        zIndex: 20000,
+        bgcolor: "#0b0b0f",
         color: "#fff",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
+        p: 2,
       }}
     >
       <audio ref={remoteAudioRef} autoPlay playsInline />
-      {/* optional: put a ring.mp3 in public/ */}
-      <audio ref={ringAudioRef} src="/ring.mp3" preload="auto" />
 
-      {isVideo && (
-        <Box
-          sx={{
-            position: "absolute",
-            inset: 0,
-            bgcolor: "#000",
-          }}
-        >
+      {mode === "video" && (
+        <Box sx={{ position: "absolute", inset: 0 }}>
           <video
             ref={remoteVideoRef}
             autoPlay
             playsInline
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
           />
           <video
             ref={localVideoRef}
             autoPlay
-            muted
             playsInline
+            muted
             style={{
               position: "absolute",
-              right: 16,
-              top: 16,
               width: 110,
               height: 160,
+              right: 12,
+              top: 12,
               objectFit: "cover",
               borderRadius: 12,
-              border: "2px solid #333",
-              background: "#111",
+              background: "#222",
             }}
           />
         </Box>
       )}
 
-      <Stack
-        spacing={2}
-        alignItems="center"
-        sx={{ position: "relative", zIndex: 2, px: 2 }}
-      >
-        {!isVideo && (
-          <Avatar
-            src={mediaSrc(targetUser?.avatar || incomingPayload?.fromAvatar)}
-            sx={{ width: 96, height: 96, bgcolor: "#333", mb: 1 }}
+      <Avatar src={avatarSrc} sx={{ width: 96, height: 96, mb: 2, zIndex: 1 }} />
+      <Typography fontWeight={800} fontSize={22} zIndex={1}>
+        {targetName}
+      </Typography>
+      <Typography color="#aaa" mb={1} zIndex={1}>
+        {status === "calling" && "Calling…"}
+        {status === "incoming" && "Incoming call…"}
+        {status === "connecting" && "Connecting…"}
+        {status === "connected" && (mode === "video" ? "Video connected" : "Connected")}
+        {status === "failed" && "Failed"}
+        {status === "ended" && "Ended"}
+      </Typography>
+      {error && (
+        <Typography color="#ff6b6b" fontSize={13} mb={2} zIndex={1}>
+          {error}
+        </Typography>
+      )}
+      {(status === "calling" || status === "connecting") && (
+        <CircularProgress size={22} sx={{ color: "#ff2d8a", mb: 2, zIndex: 1 }} />
+      )}
+
+      <Box display="flex" gap={2} mt={3} zIndex={1}>
+        {status === "incoming" && (
+          <IconButton
+            onClick={acceptIncoming}
+            sx={{ bgcolor: "#22c55e", color: "#fff", width: 64, height: 64 }}
           >
-            {String(displayName)[0]?.toUpperCase()}
-          </Avatar>
+            <Call />
+          </IconButton>
         )}
 
-        <Typography fontWeight={800} fontSize={22}>
-          {displayName}
-        </Typography>
-        <Typography color="#aaa">
-          {status === "ringing" && (isCaller ? "Calling…" : "Incoming call…")}
-          {status === "connecting" && "Connecting…"}
-          {status === "connected" && (isVideo ? "Video connected" : "Voice connected")}
-          {status === "ended" && "Call ended"}
-          {status === "idle" && "Starting…"}
-        </Typography>
+        <IconButton
+          onClick={() => {
+            const stream = localStreamRef.current;
+            stream?.getAudioTracks()?.forEach((t) => {
+              t.enabled = muted;
+            });
+            setMuted((m) => !m);
+          }}
+          sx={{ bgcolor: "#333", color: "#fff", width: 56, height: 56 }}
+        >
+          {muted ? <MicOff /> : <Mic />}
+        </IconButton>
 
-        {error && (
-          <Typography color="#ff6b6b" fontSize={14} textAlign="center">
-            {error}
-          </Typography>
+        {mode === "video" && (
+          <IconButton
+            onClick={() => {
+              const stream = localStreamRef.current;
+              stream?.getVideoTracks()?.forEach((t) => {
+                t.enabled = camOff;
+              });
+              setCamOff((v) => !v);
+            }}
+            sx={{ bgcolor: "#333", color: "#fff", width: 56, height: 56 }}
+          >
+            {camOff ? <VideocamOff /> : <Videocam />}
+          </IconButton>
         )}
 
-        <Stack direction="row" spacing={2} mt={3} alignItems="center">
-          {!isCaller && status === "ringing" && (
-            <Button
-              variant="contained"
-              color="success"
-              startIcon={<Call />}
-              onClick={acceptCall}
-              sx={{ borderRadius: 8, px: 3 }}
-            >
-              Accept
-            </Button>
-          )}
+        <IconButton
+          onClick={() => endCall(true)}
+          sx={{ bgcolor: "#ef4444", color: "#fff", width: 64, height: 64 }}
+        >
+          <CallEnd />
+        </IconButton>
+      </Box>
 
-          <IconButton
-            onClick={toggleMute}
-            sx={{ bgcolor: "#222", color: "#fff", width: 56, height: 56 }}
-          >
-            {muted ? <MicOff /> : <Mic />}
-          </IconButton>
-
-          {isVideo && (
-            <IconButton
-              onClick={toggleCam}
-              sx={{ bgcolor: "#222", color: "#fff", width: 56, height: 56 }}
-            >
-              {camOff ? <VideocamOff /> : <Videocam />}
-            </IconButton>
-          )}
-
-          <IconButton
-            onClick={endCall}
-            sx={{ bgcolor: "#e11d48", color: "#fff", width: 64, height: 64 }}
-          >
-            <CallEnd />
-          </IconButton>
-        </Stack>
-      </Stack>
+      <Box display="flex" alignItems="center" gap={0.5} mt={2} zIndex={1} color="#888">
+        <VolumeUp fontSize="small" />
+        <Typography fontSize={12}>Speaker on</Typography>
+      </Box>
     </Box>
   );
 }
+
+export default VoiceCall;
