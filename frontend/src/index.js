@@ -8,30 +8,17 @@ import { AuthProvider } from "./context/AuthContext";
 const theme = createTheme({
   palette: {
     mode: "light",
-    primary: {
-      main: "#6C4DF6",
-      dark: "#5535D9",
-    },
-    secondary: {
-      main: "#ff2d8a",
-    },
-    background: {
-      default: "#FAFAFA",
-      paper: "#FFFFFF",
-    },
-    text: {
-      primary: "#111111",
-      secondary: "#6B6B73",
-    },
+    primary: { main: "#6C4DF6", dark: "#5535D9" },
+    secondary: { main: "#ff2d8a" },
+    background: { default: "#FAFAFA", paper: "#FFFFFF" },
+    text: { primary: "#111111", secondary: "#6B6B73" },
     divider: "#E7E7EB",
   },
   typography: {
     fontFamily:
       '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   },
-  shape: {
-    borderRadius: 10,
-  },
+  shape: { borderRadius: 10 },
 });
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
@@ -49,8 +36,29 @@ root.render(
   </React.StrictMode>
 );
 
+// PWA + notifications
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   });
+}
+
+export async function askNotificationPermission() {
+  if (!("Notification" in window)) return false;
+  if (Notification.permission === "granted") return true;
+  if (Notification.permission === "denied") return false;
+  const r = await Notification.requestPermission();
+  return r === "granted";
+}
+
+export function showLocalNotification(title, body, data = {}) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    new Notification(title, {
+      body,
+      icon: "/logo192.png",
+      badge: "/logo192.png",
+      data,
+    });
+  } catch (e) {}
 }

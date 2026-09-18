@@ -1,16 +1,21 @@
 {
-  "short_name": "Gacuriro Fam",
+  "short_name": "Gacuriro",
   "name": "Gacuriro Fam",
-  "description": "Social platform — posts, reels, messages, live & Fam Links",
+  "description": "Family social network",
   "icons": [
     {
-      "src": "/logo192.png",
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
       "type": "image/png",
       "sizes": "192x192",
       "purpose": "any maskable"
     },
     {
-      "src": "/logo512.png",
+      "src": "logo512.png",
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any maskable"
@@ -18,8 +23,7 @@
   ],
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "theme_color": "#ff2d8a",
-  "background_color": "#000000",
-  "orientation": "portrait-primary",
-  "scope": "/"
+  "background_color": "#000000"
 }

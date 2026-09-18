@@ -1,5 +1,6 @@
 import { io } from "socket.io-client";
 import { API_URL } from "./api";
+import { showLocalNotification } from "../index";
 
 let socket = null;
 
@@ -16,24 +17,26 @@ export function connectSocket(userId) {
   }
 
   if (socket) {
-    socket.removeAllListeners();
-    socket.disconnect();
+    try {
+      socket.removeAllListeners();
+      socket.disconnect();
+    } catch (e) {}
     socket = null;
   }
 
   socket = io(API_URL, {
     transports: ["websocket", "polling"],
     reconnection: true,
-    reconnectionAttempts: 20,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 8000,
+    reconnectionAttempts: 30,
+    reconnectionDelay: 800,
+    reconnectionDelayMax: 6000,
     timeout: 20000,
     autoConnect: true,
     forceNew: true,
   });
 
   socket.on("connect", () => {
-    console.log("Socket connected:", API_URL, socket.id);
+    console.log("Socket connected", API_URL, socket.id);
     socket.emit("user:online", String(userId));
   });
 
@@ -42,28 +45,34 @@ export function connectSocket(userId) {
   });
 
   socket.on("connect_error", (err) => {
-    console.log("Socket connect_error:", err?.message || err);
+    console.log("Socket error:", err?.message || err);
   });
 
-  socket.on("disconnect", (reason) => {
-    console.log("Socket disconnect:", reason);
+  // Incoming call → system notification
+  socket.on("call:incoming", (payload) => {
+    showLocalNotification("Incoming call", payload?.fromName || "Someone is calling", {
+      type: "call",
+    });
+  });
+
+  socket.on("message:new", (payload) => {
+    showLocalNotification(
+      payload?.fromName || "New message",
+      payload?.text || "Open Gacuriro Fam",
+      { type: "message" }
+    );
   });
 
   return socket;
 }
 
 export function disconnectSocket() {
-  if (socket) {
+  if (!socket) return;
+  try {
     socket.removeAllListeners();
     socket.disconnect();
-    socket = null;
-  }
+  } catch (e) {}
+  socket = null;
 }
 
-const socketApi = {
-  getSocket,
-  connectSocket,
-  disconnectSocket,
-};
-
-export default socketApi;
+export default { getSocket, connectSocket, disconnectSocket };

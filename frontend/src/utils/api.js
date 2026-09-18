@@ -24,7 +24,6 @@ export function mediaUrl(path) {
 export async function api(path, options = {}) {
   const token = localStorage.getItem("token");
   const headers = { ...(options.headers || {}) };
-
   if (!(options.body instanceof FormData)) {
     headers["Content-Type"] = headers["Content-Type"] || "application/json";
   }
@@ -34,8 +33,7 @@ export async function api(path, options = {}) {
     ? path
     : `${API_URL}${path.startsWith("/") ? path : `/${path}`}`;
 
-  const res = await fetch(url, { ...options, headers });
-  return res;
+  return fetch(url, { ...options, headers });
 }
 
 export { API_URL };
