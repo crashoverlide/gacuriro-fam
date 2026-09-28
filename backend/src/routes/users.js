@@ -22,7 +22,7 @@ function shapeUser(u) {
   };
 }
 
-// ——— fixed paths first ———
+// ——— fixed paths FIRST (before /:username) ———
 
 router.put("/me", protect, async (req, res) => {
   try {
@@ -105,24 +105,25 @@ router.get("/suggested", protect, async (req, res) => {
 
     const exclude = new Set([
       req.user.id,
-      ...(following || []).map((f) => f.following_id),
+      ...((following || []).map((f) => f.following_id)),
     ]);
 
-    const { data: users, error } = await supabase
+    const { data, error } = await supabase
       .from("users")
       .select(
-        "id, username, email, full_name, avatar, bio, posts_count, is_private, two_factor_enabled"
+        "id, username, email, full_name, avatar, bio, posts_count, is_private"
       )
+      .order("created_at", { ascending: false })
       .limit(30);
 
     if (error) return res.status(500).json({ message: error.message });
 
-    res.json({
-      users: (users || [])
-        .filter((u) => !exclude.has(u.id))
-        .slice(0, 15)
-        .map(shapeUser),
-    });
+    const users = (data || [])
+      .filter((u) => !exclude.has(u.id))
+      .slice(0, 15)
+      .map(shapeUser);
+
+    res.json({ users });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -130,16 +131,16 @@ router.get("/suggested", protect, async (req, res) => {
 
 router.get("/search", protect, async (req, res) => {
   try {
-    const q = (req.query.q || "").trim();
+    const q = String(req.query.q || "").trim().toLowerCase();
     if (!q) return res.json({ users: [] });
 
     const { data, error } = await supabase
       .from("users")
       .select(
-        "id, username, email, full_name, avatar, bio, posts_count, is_private, two_factor_enabled"
+        "id, username, email, full_name, avatar, bio, posts_count, is_private"
       )
       .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
-      .limit(30);
+      .limit(20);
 
     if (error) return res.status(500).json({ message: error.message });
     res.json({ users: (data || []).map(shapeUser) });
@@ -148,38 +149,66 @@ router.get("/search", protect, async (req, res) => {
   }
 });
 
+// Follow by id OR username
 router.post("/:id/follow", protect, async (req, res) => {
   try {
-    const targetId = req.params.id;
-    if (targetId === req.user.id) {
+    let targetId = req.params.id;
+
+    // if not uuid, treat as username
+    if (!/^[0-9a-f-]{36}$/i.test(targetId)) {
+      const { data: u } = await supabase
+        .from("users")
+        .select("id")
+        .eq("username", targetId.toLowerCase())
+        .maybeSingle();
+      if (!u) return res.status(404).json({ message: "User not found" });
+      targetId = u.id;
+    }
+
+    if (String(targetId) === String(req.user.id)) {
       return res.status(400).json({ message: "Cannot follow yourself" });
     }
-    const { error } = await supabase.from("follows").upsert({
+
+    const { error } = await supabase.from("follows").insert({
       follower_id: req.user.id,
       following_id: targetId,
     });
-    if (error) return res.status(400).json({ message: error.message });
-    res.json({ message: "Followed" });
+
+    if (error && !String(error.message).includes("duplicate")) {
+      return res.status(400).json({ message: error.message });
+    }
+
+    res.json({ following: true });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-router.post("/:id/unfollow", protect, async (req, res) => {
+router.delete("/:id/follow", protect, async (req, res) => {
   try {
+    let targetId = req.params.id;
+    if (!/^[0-9a-f-]{36}$/i.test(targetId)) {
+      const { data: u } = await supabase
+        .from("users")
+        .select("id")
+        .eq("username", targetId.toLowerCase())
+        .maybeSingle();
+      if (!u) return res.status(404).json({ message: "User not found" });
+      targetId = u.id;
+    }
+
     const { error } = await supabase
       .from("follows")
       .delete()
       .eq("follower_id", req.user.id)
-      .eq("following_id", req.params.id);
+      .eq("following_id", targetId);
+
     if (error) return res.status(400).json({ message: error.message });
-    res.json({ message: "Unfollowed" });
+    res.json({ following: false, message: "Unfollowed" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
-
-// ——— followers / following (before bare /:username) ———
 
 router.get("/:username/followers", protect, async (req, res) => {
   try {
@@ -255,7 +284,7 @@ router.get("/:username/posts", protect, async (req, res) => {
   try {
     const { data: user } = await supabase
       .from("users")
-      .select("id")
+      .select("id, username, full_name, avatar")
       .eq("username", req.params.username.toLowerCase())
       .maybeSingle();
 
@@ -268,12 +297,20 @@ router.get("/:username/posts", protect, async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) return res.status(500).json({ message: error.message });
-    res.json({ posts: posts || [] });
+
+    const withAuthor = (posts || []).map((p) => ({
+      ...p,
+      users: user,
+      user,
+    }));
+
+    res.json({ posts: withAuthor });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
+// Profile by username (LAST)
 router.get("/:username", protect, async (req, res) => {
   try {
     const { data, error } = await supabase
