@@ -16,14 +16,28 @@ function Home() {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API_URL}/api/posts/feed`, {
+      // try feed first, then explore as fallback (all public posts)
+      let res = await fetch(`${API_URL}/api/posts/feed`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.message || "Failed to load feed");
-      setPosts(data.posts || data || []);
+      let data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        res = await fetch(`${API_URL}/api/posts/explore`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        data = await res.json().catch(() => ({}));
+      }
+
+      if (!res.ok) {
+        throw new Error(data.message || `Feed error ${res.status}`);
+      }
+
+      const list = data.posts || data || [];
+      setPosts(Array.isArray(list) ? list : []);
     } catch (e) {
-      setError(e.message || "Failed to load");
+      setError(e.message || "Failed to load feed");
+      setPosts([]);
     } finally {
       setLoading(false);
     }
@@ -34,7 +48,7 @@ function Home() {
   }, [fetchFeed]);
 
   return (
-    <Box sx={{ maxWidth: 540, mx: "auto", pb: 10, pt: 1 }}>
+    <Box sx={{ maxWidth: 540, mx: "auto", pb: 10, pt: 1, px: { xs: 0, sm: 1 } }}>
       <StoryBar />
 
       {loading && (
@@ -44,11 +58,13 @@ function Home() {
       )}
 
       {!!error && !loading && (
-        <Box textAlign="center" py={4}>
+        <Box textAlign="center" py={4} px={2}>
           <Typography color="error" mb={1}>
             {error}
           </Typography>
-          <Button onClick={fetchFeed}>Retry</Button>
+          <Button variant="outlined" onClick={fetchFeed}>
+            Retry
+          </Button>
         </Box>
       )}
 
@@ -57,10 +73,19 @@ function Home() {
           <PostCard key={p.id || p._id} post={p} onUpdated={fetchFeed} />
         ))}
 
-      {!loading && !posts.length && !error && (
-        <Typography textAlign="center" color="text.secondary" py={6}>
-          No posts yet — follow people or create one.
-        </Typography>
+      {!loading && !error && posts.length === 0 && (
+        <Box textAlign="center" py={6} px={2}>
+          <Typography fontWeight={700} mb={1}>
+            No posts yet
+          </Typography>
+          <Typography color="text.secondary" fontSize={14} mb={2}>
+            Create a post or wait for others. Home shows recent posts from
+            everyone.
+          </Typography>
+          <Button variant="contained" href="/create">
+            Create
+          </Button>
+        </Box>
       )}
     </Box>
   );
