@@ -29,8 +29,36 @@ import { useAuth } from "../context/AuthContext";
 import { API_URL, mediaUrl } from "../utils/api";
 import CommentsDrawer from "./CommentsDrawer";
 
+function getAuthor(post) {
+  const a =
+    post.users ||
+    post.user ||
+    post.author ||
+    post.owner ||
+    {};
+  const username =
+    a.username ||
+    a.userName ||
+    post.username ||
+    post.user_username ||
+    "";
+  const id = a.id || a._id || post.user_id || post.userId;
+  const avatar = a.avatar || a.profilePic || post.avatar || "";
+  const fullName = a.full_name || a.fullName || "";
+  return {
+    id,
+    username: username || "user",
+    avatar,
+    fullName,
+  };
+}
+
 function PostCard({ post, onUpdated }) {
   const { token, user } = useAuth();
+  const author = getAuthor(post);
+  const username = author.username;
+  const avatarSrc = author.avatar ? mediaUrl(author.avatar) : undefined;
+
   const [liked, setLiked] = useState(!!post.liked_by_me || !!post.liked);
   const [likes, setLikes] = useState(post.likes_count || post.likesCount || 0);
   const [saved, setSaved] = useState(!!post.saved);
@@ -44,14 +72,11 @@ function PostCard({ post, onUpdated }) {
   const [following, setFollowing] = useState(!!post.following_author);
   const videoRef = useRef(null);
 
-  const author = post.users || post.user || post.author || {};
-  const username = author.username || post.username || "user";
-  const avatar = author.avatar ? mediaUrl(author.avatar) : undefined;
-  const media = post.media_url || post.mediaUrl || post.image || "";
+  const media = post.media_url || post.mediaUrl || post.image || post.video || "";
   const isVideo =
     post.media_type === "video" ||
     post.is_reel ||
-    /\.(mp4|webm|mov)$/i.test(media || "");
+    /\.(mp4|webm|mov)(\?|$)/i.test(media || "");
   const postId = post.id || post._id;
   const caption = post.caption || post.text || "";
 
@@ -78,9 +103,7 @@ function PostCard({ post, onUpdated }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && typeof data.liked === "boolean") {
-        setLiked(data.liked);
-      }
+      if (res.ok && typeof data.liked === "boolean") setLiked(data.liked);
       onUpdated && onUpdated();
     } catch (e) {
       setLiked(prevLiked);
@@ -97,19 +120,19 @@ function PostCard({ post, onUpdated }) {
   };
 
   const followAuthor = async () => {
+    if (!author.id && username === "user") return;
     try {
-      const res = await fetch(`${API_URL}/api/users/${author.id || username}/follow`, {
+      const target = author.id || username;
+      const res = await fetch(`${API_URL}/api/users/${target}/follow`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) setFollowing(true);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) {}
   };
 
   const isMe =
-    String(author.id || author._id) === String(user?.id || user?._id) ||
+    String(author.id) === String(user?.id || user?._id) ||
     username === user?.username;
 
   return (
@@ -128,22 +151,26 @@ function PostCard({ post, onUpdated }) {
     >
       <CardHeader
         avatar={
-          <Avatar component={Link} to={`/${username}`} src={avatar}>
-            {username[0]?.toUpperCase()}
+          <Avatar
+            component={Link}
+            to={username && username !== "user" ? `/${username}` : "#"}
+            src={avatarSrc}
+          >
+            {(username || "U")[0].toUpperCase()}
           </Avatar>
         }
         title={
           <Box display="flex" alignItems="center" gap={1}>
             <Typography
               component={Link}
-              to={`/${username}`}
+              to={username && username !== "user" ? `/${username}` : "#"}
               fontWeight={700}
               fontSize={14}
               sx={{ textDecoration: "none", color: "inherit" }}
             >
               {username}
             </Typography>
-            {!isMe && !following && (
+            {!isMe && !following && username !== "user" && (
               <Button
                 size="small"
                 onClick={followAuthor}
@@ -160,7 +187,7 @@ function PostCard({ post, onUpdated }) {
             <MoreHoriz />
           </IconButton>
         }
-        sx={{ py: 1, "& .MuiCardHeader-title": { fontSize: 14 } }}
+        sx={{ py: 1 }}
       />
 
       <Box
@@ -175,7 +202,6 @@ function PostCard({ post, onUpdated }) {
               muted={muted}
               playsInline
               loop
-              controls={false}
               onClick={(e) => {
                 const v = e.currentTarget;
                 if (v.paused) v.play().catch(() => {});
@@ -185,25 +211,31 @@ function PostCard({ post, onUpdated }) {
             />
             <IconButton
               onClick={toggleMute}
+              size="small"
               sx={{
                 position: "absolute",
                 right: 8,
                 bottom: 8,
                 bgcolor: "rgba(0,0,0,0.55)",
                 color: "#fff",
-                "&:hover": { bgcolor: "rgba(0,0,0,0.7)" },
               }}
-              size="small"
             >
               {muted ? <VolumeOff fontSize="small" /> : <VolumeUp fontSize="small" />}
             </IconButton>
           </>
-        ) : (
+        ) : media ? (
           <img
             src={mediaUrl(media)}
             alt=""
-            style={{ width: "100%", maxHeight: 620, objectFit: "cover", display: "block" }}
+            style={{
+              width: "100%",
+              maxHeight: 620,
+              objectFit: "cover",
+              display: "block",
+            }}
           />
+        ) : (
+          <Box height={200} bgcolor="#111" />
         )}
 
         {heart && (
@@ -213,7 +245,7 @@ function PostCard({ post, onUpdated }) {
               inset: 0,
               display: "flex",
               alignItems: "center",
-              justifyContent: "center",
+              justifyContent="center",
               pointerEvents: "none",
               animation: "heartPop 0.7s ease",
               "@keyframes heartPop": {
@@ -229,7 +261,10 @@ function PostCard({ post, onUpdated }) {
       </Box>
 
       <CardActions disableSpacing sx={{ px: 0.5, pt: 0.5 }}>
-        <IconButton onClick={doLike} sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
+        <IconButton
+          onClick={doLike}
+          sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}
+        >
           {liked ? <Favorite sx={{ color: "#ed4956" }} /> : <FavoriteBorder />}
         </IconButton>
         <IconButton
@@ -238,10 +273,10 @@ function PostCard({ post, onUpdated }) {
         >
           <ChatBubbleOutline />
         </IconButton>
-        <IconButton sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
+        <IconButton>
           <Send />
         </IconButton>
-        <IconButton sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}>
+        <IconButton>
           <Repeat />
         </IconButton>
         <Box flex={1} />
@@ -252,11 +287,20 @@ function PostCard({ post, onUpdated }) {
 
       <CardContent sx={{ pt: 0, pb: "12px !important" }}>
         <Typography fontWeight={700} fontSize={14}>
-          {likes.toLocaleString()} likes
+          {Number(likes).toLocaleString()} likes
         </Typography>
         {caption && (
           <Typography fontSize={14} mt={0.5}>
-            <Box component={Link} to={`/${username}`} sx={{ fontWeight: 700, mr: 0.7, textDecoration: "none", color: "inherit" }}>
+            <Box
+              component={Link}
+              to={username !== "user" ? `/${username}` : "#"}
+              sx={{
+                fontWeight: 700,
+                mr: 0.7,
+                textDecoration: "none",
+                color: "inherit",
+              }}
+            >
               {username}
             </Box>
             {caption}
@@ -274,20 +318,32 @@ function PostCard({ post, onUpdated }) {
       </CardContent>
 
       <Menu anchorEl={anchor} open={!!anchor} onClose={() => setAnchor(null)}>
-        <MenuItem component={Link} to={`/post/${postId}`} onClick={() => setAnchor(null)}>
+        <MenuItem
+          component={Link}
+          to={`/post/${postId}`}
+          onClick={() => setAnchor(null)}
+        >
           Go to post
         </MenuItem>
         <MenuItem
           onClick={() => {
-            navigator.clipboard?.writeText(`${window.location.origin}/post/${postId}`);
+            navigator.clipboard?.writeText(
+              `${window.location.origin}/post/${postId}`
+            );
             setAnchor(null);
           }}
         >
           Copy link
         </MenuItem>
-        <MenuItem component={Link} to={`/${username}`} onClick={() => setAnchor(null)}>
-          About this account
-        </MenuItem>
+        {username !== "user" && (
+          <MenuItem
+            component={Link}
+            to={`/${username}`}
+            onClick={() => setAnchor(null)}
+          >
+            About this account
+          </MenuItem>
+        )}
       </Menu>
 
       <CommentsDrawer
