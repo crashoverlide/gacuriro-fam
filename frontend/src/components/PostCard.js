@@ -30,18 +30,9 @@ import { API_URL, mediaUrl } from "../utils/api";
 import CommentsDrawer from "./CommentsDrawer";
 
 function getAuthor(post) {
-  const a =
-    post.users ||
-    post.user ||
-    post.author ||
-    post.owner ||
-    {};
+  const a = post.users || post.user || post.author || post.owner || {};
   const username =
-    a.username ||
-    a.userName ||
-    post.username ||
-    post.user_username ||
-    "";
+    a.username || a.userName || post.username || post.user_username || "";
   const id = a.id || a._id || post.user_id || post.userId;
   const avatar = a.avatar || a.profilePic || post.avatar || "";
   const fullName = a.full_name || a.fullName || "";
@@ -104,7 +95,7 @@ function PostCard({ post, onUpdated }) {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && typeof data.liked === "boolean") setLiked(data.liked);
-      onUpdated && onUpdated();
+      if (onUpdated) onUpdated();
     } catch (e) {
       setLiked(prevLiked);
       setLikes(prevLikes);
@@ -174,7 +165,12 @@ function PostCard({ post, onUpdated }) {
               <Button
                 size="small"
                 onClick={followAuthor}
-                sx={{ textTransform: "none", fontWeight: 700, minWidth: 0, p: 0 }}
+                sx={{
+                  textTransform: "none",
+                  fontWeight: 700,
+                  minWidth: 0,
+                  p: 0,
+                }}
               >
                 Follow
               </Button>
@@ -220,7 +216,11 @@ function PostCard({ post, onUpdated }) {
                 color: "#fff",
               }}
             >
-              {muted ? <VolumeOff fontSize="small" /> : <VolumeUp fontSize="small" />}
+              {muted ? (
+                <VolumeOff fontSize="small" />
+              ) : (
+                <VolumeUp fontSize="small" />
+              )}
             </IconButton>
           </>
         ) : media ? (
@@ -245,7 +245,7 @@ function PostCard({ post, onUpdated }) {
               inset: 0,
               display: "flex",
               alignItems: "center",
-              justifyContent="center",
+              justifyContent: "center",
               pointerEvents: "none",
               animation: "heartPop 0.7s ease",
               "@keyframes heartPop": {
@@ -263,13 +263,19 @@ function PostCard({ post, onUpdated }) {
       <CardActions disableSpacing sx={{ px: 0.5, pt: 0.5 }}>
         <IconButton
           onClick={doLike}
-          sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}
+          sx={{
+            transition: "transform 0.15s",
+            "&:active": { transform: "scale(0.85)" },
+          }}
         >
           {liked ? <Favorite sx={{ color: "#ed4956" }} /> : <FavoriteBorder />}
         </IconButton>
         <IconButton
           onClick={() => setCommentsOpen(true)}
-          sx={{ transition: "transform 0.15s", "&:active": { transform: "scale(0.85)" } }}
+          sx={{
+            transition: "transform 0.15s",
+            "&:active": { transform: "scale(0.85)" },
+          }}
         >
           <ChatBubbleOutline />
         </IconButton>
@@ -289,7 +295,7 @@ function PostCard({ post, onUpdated }) {
         <Typography fontWeight={700} fontSize={14}>
           {Number(likes).toLocaleString()} likes
         </Typography>
-        {caption && (
+        {caption ? (
           <Typography fontSize={14} mt={0.5}>
             <Box
               component={Link}
@@ -305,7 +311,7 @@ function PostCard({ post, onUpdated }) {
             </Box>
             {caption}
           </Typography>
-        )}
+        ) : null}
         <Typography
           fontSize={13}
           color="text.secondary"
@@ -335,7 +341,7 @@ function PostCard({ post, onUpdated }) {
         >
           Copy link
         </MenuItem>
-        {username !== "user" && (
+        {username !== "user" ? (
           <MenuItem
             component={Link}
             to={`/${username}`}
@@ -343,7 +349,7 @@ function PostCard({ post, onUpdated }) {
           >
             About this account
           </MenuItem>
-        )}
+        ) : null}
       </Menu>
 
       <CommentsDrawer
